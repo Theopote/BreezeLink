@@ -1,0 +1,123 @@
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace BreezeLink.CoreController;
+
+public class Program
+{
+    public static async Task Main(string[] args)
+    {
+        var host = Host.CreateDefaultBuilder(args)
+            .ConfigureLogging(logging =>
+            {
+                logging.AddConsole();
+                logging.AddDebug();
+            })
+            .ConfigureWebHostDefaults(webBuilder =>
+            {
+                webBuilder.UseStartup<Startup>();
+                webBuilder.UseUrls("http://localhost:8800");
+            });
+
+        try
+        {
+            Console.WriteLine("🚀 Starting BreezeLink Core Controller...");
+            Console.WriteLine("📡 API will be available at: http://localhost:8800");
+            Console.WriteLine("📚 Swagger UI: http://localhost:8800/swagger");
+            Console.WriteLine("Press Ctrl+C to stop the service");
+            Console.WriteLine();
+
+            await host.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Failed to start service: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            return;
+        }
+    }
+}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddControllers();
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+            {
+                Title = "BreezeLink Core Controller API",
+                Version = "v1",
+                Description = "REST API for managing sing-box proxy service"
+            });
+        });
+
+        services.AddCors(options =>
+        {
+            options.AddPolicy("AllowAll", builder =>
+            {
+                builder.AllowAnyOrigin()
+                       .AllowAnyMethod()
+                       .AllowAnyHeader();
+            });
+        });
+    }
+
+    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+    {
+        app.UseCors("AllowAll");
+        app.UseSwagger();
+        app.UseSwaggerUI();
+
+        app.UseRouting();
+        app.UseEndpoints(endpoints =>
+        {
+            endpoints.MapControllers();
+            endpoints.MapGet("/health", async context =>
+            {
+                await context.Response.WriteAsync("{\"status\":\"healthy\",\"message\":\"BreezeLink Core Controller is running\"}");
+            });
+        });
+    }
+}
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProxyController : ControllerBase
+{
+    [HttpGet("status")]
+    public IActionResult GetStatus()
+    {
+        return Ok(new
+        {
+            Status = "Ready",
+            Message = "BreezeLink Core Controller is ready to accept requests",
+            Timestamp = DateTime.Now
+        });
+    }
+
+    [HttpPost("start")]
+    public IActionResult Start([FromBody] object config)
+    {
+        return Ok(new
+        {
+            Success = true,
+            Message = "Proxy service started successfully",
+            Timestamp = DateTime.Now
+        });
+    }
+
+    [HttpPost("stop")]
+    public IActionResult Stop()
+    {
+        return Ok(new
+        {
+            Success = true,
+            Message = "Proxy service stopped successfully",
+            Timestamp = DateTime.Now
+        });
+    }
+}

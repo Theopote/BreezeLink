@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore BreezeLink.sln
+
+    - name: Build core controller
+      run: dotnet build core-controller/BreezeLink.CoreController.csproj --configuration Release --no-restore
+
+    - name: Build UI
+      run: dotnet build ui/BreezeLink.UI.csproj --configuration Release --no-restore
+
+    - name: Run tests
+      run: dotnet test --no-restore --verbosity normal
+
+    - name: Publish core controller
+      run: dotnet publish core-controller/BreezeLink.CoreController.csproj --configuration Release --runtime win-x64 --self-contained false --output artifacts/core-controller
+
+    - name: Publish UI
+      run: dotnet publish ui/BreezeLink.UI.csproj --configuration Release --runtime win-x64 --self-contained false --output artifacts/ui
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: BreezeLink-Build
+        path: artifacts/

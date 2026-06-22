@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore BreezeLink.sln
+
+    - name: Publish core controller
+      run: dotnet publish core-controller/BreezeLink.CoreController.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/core-controller
+
+    - name: Publish UI
+      run: dotnet publish ui/BreezeLink.UI.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/ui
+
+    - name: Create installer
+      run: |
+        # Create installer using dotnet-wpf-installer or similar tool
+        # This is a placeholder for actual installer creation
+        echo "Creating installer..."
+
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./installer/BreezeLink-Setup.exe
+        asset_name: BreezeLink-Setup.exe
+        asset_content_type: application/vnd.microsoft.portable-executable

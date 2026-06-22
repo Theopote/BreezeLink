@@ -1,0 +1,281 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using BreezeLink.CoreController.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+namespace BreezeLink.CoreController;
+
+public class Program
+{
+    public static async Task Main(string[] args)
+    {
+        var host = Host.CreateDefaultBuilder(args)
+            .ConfigureLogging(logging =>
+            {
+                logging.AddConsole();
+                logging.AddDebug();
+            })
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IProxyProcessManager, SingBoxProcessManager>();
+                services.AddSingleton<INodeManagementService, NodeManagementService>();
+                services.AddSingleton<INodeTestingService, NodeTestingService>();
+                services.AddSingleton<IRuleManagementService, RuleManagementService>();
+                services.AddSingleton<ITrafficMonitoringService, TrafficMonitoringService>();
+                services.AddSingleton<ISystemTrayService, SystemTrayService>();
+                services.AddSingleton<IAutoSwitchService, AutoSwitchService>();
+                services.AddSingleton<IConfigImportService, ConfigImportService>();
+                services.AddSingleton<IVpnModeService, VpnModeService>();
+                services.AddSingleton<IAdvancedRuleEngine, AdvancedRuleEngine>();
+                services.AddSingleton<INetworkDiagnosticsService, NetworkDiagnosticsService>();
+                services.AddSingleton<IPluginSystem, PluginSystem>();
+                services.AddSingleton<ISecurityService, SecurityService>();
+                services.AddSingleton<IDataAnalyticsService, DataAnalyticsService>();
+                services.AddSingleton<IPerformanceOptimizationService, PerformanceOptimizationService>();
+                services.AddSingleton<RuleCache>();
+                services.AddSingleton<RuleOptimizer>();
+                services.AddSingleton<NotificationService>();
+                services.AddHostedService<ProxyService>();
+
+                // 注册控制器
+                services.AddControllers()
+                    .AddApplicationPart(typeof(ProxyController).Assembly)
+                    .AddApplicationPart(typeof(NodesController).Assembly)
+                    .AddApplicationPart(typeof(VpnController).Assembly)
+                    .AddApplicationPart(typeof(AdvancedRulesController).Assembly)
+                    .AddApplicationPart(typeof(NetworkDiagnosticsController).Assembly)
+                    .AddApplicationPart(typeof(PluginController).Assembly)
+                    .AddApplicationPart(typeof(SecurityController).Assembly)
+                    .AddApplicationPart(typeof(DataAnalyticsController).Assembly)
+                    .AddApplicationPart(typeof(PerformanceOptimizationController).Assembly);
+
+                // 注册 HTTP 客户端
+                services.AddHttpClient();
+
+                // 注册 API 文档
+                services.AddEndpointsApiExplorer();
+                services.AddSwaggerGen(c =>
+                {
+                    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+                    {
+                        Title = "BreezeLink Core Controller API",
+                        Version = "v1",
+                        Description = "REST API for managing sing-box proxy service with advanced security features"
+                    });
+
+                    // 添加JWT认证支持
+                    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                    {
+                        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+                        Name = "Authorization",
+                        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+                        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+                        Scheme = "Bearer"
+                    });
+
+                    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+                    {
+                        {
+                            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                            {
+                                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                                {
+                                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                                    Id = "Bearer"
+                                }
+                            },
+                            new string[] {}
+                        }
+                    });
+                });
+
+                // 注册 CORS（开发环境）
+                services.AddCors(options =>
+                {
+                    options.AddPolicy("AllowAll", builder =>
+                    {
+                        builder.AllowAnyOrigin()
+                               .AllowAnyMethod()
+                               .AllowAnyHeader();
+                    });
+                });
+
+                // 注册认证服务
+                services.AddAuthentication(options =>
+                {
+                    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                })
+                .AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuer = false,
+                        ValidateAudience = false,
+                        ValidateLifetime = true,
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("BreezeLinkDefaultSecretKey12345678901234567890")),
+                        ClockSkew = TimeSpan.FromMinutes(5)
+                    };
+
+                    options.Events = new JwtBearerEvents
+                    {
+                        OnTokenValidated = async context =>
+                        {
+                            var securityService = context.HttpContext.RequestServices.GetService<ISecurityService>();
+                            if (securityService != null)
+                            {
+                                var validationResult = await securityService.ValidateTokenAsync(context.SecurityToken.RawData);
+                                if (!validationResult.IsValid)
+                                {
+                                    context.Fail("Token validation failed");
+                                }
+                            }
+                        },
+                        OnAuthenticationFailed = context =>
+                        {
+                            Console.WriteLine($"Authentication failed: {context.Exception.Message}");
+                            return Task.CompletedTask;
+                        }
+                    };
+                });
+
+                // 注册授权服务
+                services.AddAuthorization(options =>
+                {
+                    options.AddPolicy("AdminOnly", policy =>
+                        policy.RequireRole("Administrator"));
+                });
+            })
+            .ConfigureWebHostDefaults(webBuilder =>
+            {
+                webBuilder.UseKestrel(options =>
+                {
+                    options.ListenAnyIP(8800); // 监听所有接口的 8800 端口
+                });
+
+                webBuilder.UseUrls("http://localhost:8800");
+            });
+
+        try
+        {
+            Console.WriteLine("🚀 Starting BreezeLink Core Controller v0.9...");
+            Console.WriteLine("📡 API will be available at: http://localhost:8800");
+            Console.WriteLine("📚 Swagger UI: http://localhost:8800");
+            Console.WriteLine("✨ New features: Node Management, Rule Management, Traffic Monitoring, Auto Switch, Config Import, VPN Mode, Advanced Rules, Network Diagnostics, Plugin System, Security Enhancement, Data Analytics, Performance Optimization");
+            Console.WriteLine("🔒 Security features: JWT Authentication, Rate Limiting, Audit Logging, Data Encryption");
+            Console.WriteLine("📊 Analytics features: Real-time Data Collection, Chart Generation, Reports, Statistics");
+            Console.WriteLine("⚡ Performance features: Cache Optimization, Async Processing, Database Tuning, Network Optimization");
+            Console.WriteLine("Press Ctrl+C to stop the service");
+            Console.WriteLine();
+
+            await host.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Failed to start service: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            return;
+        }
+    }
+}
+
+public class ProxyService : BackgroundService
+{
+    private readonly IProxyProcessManager _proxyManager;
+    private readonly ITrafficMonitoringService _trafficMonitoring;
+    private readonly IAutoSwitchService _autoSwitch;
+    private readonly ISystemTrayService _systemTray;
+    private readonly ILogger<ProxyService> _logger;
+
+    public ProxyService(
+        IProxyProcessManager proxyManager,
+        ITrafficMonitoringService trafficMonitoring,
+        IAutoSwitchService autoSwitch,
+        ISystemTrayService systemTray,
+        ILogger<ProxyService> logger)
+    {
+        _proxyManager = proxyManager;
+        _trafficMonitoring = trafficMonitoring;
+        _autoSwitch = autoSwitch;
+        _systemTray = systemTray;
+        _logger = logger;
+    }
+
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("ProxyService starting...");
+
+        // 启动流量监控
+        _trafficMonitoring.StartMonitoring();
+
+        // 启动系统托盘
+        await _systemTray.InitializeAsync();
+
+        // 启动自动切换
+        var config = new AutoSwitchConfig
+        {
+            Enabled = false, // 默认关闭，需要用户手动启用
+            CheckIntervalSeconds = 300,
+            MaxLatencyThreshold = 1000,
+            MinLatencyThreshold = 50
+        };
+        await _autoSwitch.StartAutoSwitchAsync(config);
+
+        await base.StartAsync(cancellationToken);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("ProxyService stopping...");
+
+        // 停止自动切换
+        await _autoSwitch.StopAutoSwitchAsync();
+
+        // 停止流量监控
+        _trafficMonitoring.StopMonitoring();
+
+        await base.StopAsync(cancellationToken);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("ProxyService started");
+
+        // 订阅日志事件
+        _proxyManager.OnLogReceived += (sender, logMessage) =>
+        {
+            _logger.LogInformation("Proxy Log: {LogMessage}", logMessage);
+        };
+
+        // 监控任务
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                // 定期检查进程状态
+                var status = _proxyManager.GetStatus();
+                _logger.LogDebug("Proxy status: {Status}, Running: {IsRunning}, PID: {ProcessId}",
+                    status, _proxyManager.IsRunning, _proxyManager.ProcessId);
+
+                // 如果进程异常退出，可以在这里添加重启逻辑
+                if (status == ProxyStatus.Error)
+                {
+                    _logger.LogWarning("Proxy process has exited unexpectedly");
+                }
+
+                await Task.Delay(5000, stoppingToken); // 每5秒检查一次
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in proxy monitoring loop");
+                await Task.Delay(10000, stoppingToken); // 出错时等待更长时间
+            }
+        }
+
+        _logger.LogInformation("ProxyService stopped");
+    }
+}
