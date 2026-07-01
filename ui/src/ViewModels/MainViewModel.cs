@@ -29,6 +29,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool isLoading = false;
 
+    public bool IsNotLoading => !IsLoading;
+
+    partial void OnIsLoadingChanged(bool value) => OnPropertyChanged(nameof(IsNotLoading));
+
     [ObservableProperty]
     private string startButtonText = "启动代理";
 

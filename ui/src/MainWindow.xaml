@@ -42,10 +42,10 @@
         <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="12">
             <Button Content="{x:Bind ViewModel.StartButtonText, Mode=OneWay}"
                     Command="{x:Bind ViewModel.StartProxyCommand}"
-                    IsEnabled="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"/>
+                    IsEnabled="{x:Bind ViewModel.IsNotLoading, Mode=OneWay}"/>
             <Button Content="{x:Bind ViewModel.StopButtonText, Mode=OneWay}"
                     Command="{x:Bind ViewModel.StopProxyCommand}"
-                    IsEnabled="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"/>
+                    IsEnabled="{x:Bind ViewModel.IsNotLoading, Mode=OneWay}"/>
             <Button Content="重载配置" Command="{x:Bind ViewModel.ReloadProxyCommand}"/>
             <Button Content="刷新状态" Command="{x:Bind ViewModel.RefreshStatusCommand}"/>
             <Button Content="节点管理" Click="NodeManagementButton_Click"/>

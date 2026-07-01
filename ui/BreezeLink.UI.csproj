@@ -10,6 +10,10 @@
     <EnableMsixTooling>false</EnableMsixTooling>
     <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
     <WindowsPackageType>None</WindowsPackageType>
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
+    <AppxPackage>false</AppxPackage>
+    <GeneratePriConfigXmlFile>false</GeneratePriConfigXmlFile>
+    <DisableMrtCore>true</DisableMrtCore>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -26,9 +30,5 @@
   <ItemGroup>
     <Compile Include="..\core-controller\src\Models\ApiModels.cs" Link="Models\ApiModels.cs" />
     <Compile Include="..\core-controller\src\Models\NodeModels.cs" Link="Models\NodeModels.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Assets\**\*" />
   </ItemGroup>
 </Project>
