@@ -6,8 +6,8 @@
     <RootNamespace>BreezeLink.UI</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-    <!-- VS WinUI 工具栏可能显示 Win/Win32，统一映射到 x64 -->
-    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'Any CPU' or '$(Platform)' == 'Win32'">x64</Platform>
+    <!-- VS 可能传入 Any CPU / Win32，统一按 x64 编译 -->
+    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'Any CPU' or '$(Platform)' == 'AnyCPU' or '$(Platform)' == 'Win32'">x64</Platform>
     <PlatformTarget>x64</PlatformTarget>
     <!-- VS F5 默认找 bin\Debug\，不要带 x64 子目录 -->
     <AppendPlatformToOutputPath>false</AppendPlatformToOutputPath>
