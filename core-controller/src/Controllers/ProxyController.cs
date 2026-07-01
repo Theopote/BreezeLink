@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using BreezeLink.CoreController.Models;
+using BreezeLink.CoreController.Services;
 using System.Text.Json;
 
 namespace BreezeLink.CoreController.Controllers;

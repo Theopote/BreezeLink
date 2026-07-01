@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using BreezeLink.CoreController.Models;
+using Microsoft.Extensions.Logging;
 
 namespace BreezeLink.UI.Services;
 

@@ -8,19 +8,14 @@ namespace BreezeLink.CoreController.Services;
 /// </summary>
 public interface INodeTestingService
 {
-    /// <summary>
-    /// 测试单个节点的连接性
-    /// </summary>
+    Task<List<string>> ValidateNodeAsync(ProxyNode node);
     Task<NodeTestResult> TestNodeAsync(ProxyNode node, int timeout = 5000);
-
-    /// <summary>
-    /// 批量测试节点
-    /// </summary>
+    Task<NodeTestResult> TestNodeAsync(Guid nodeId, int timeout = 5000, string? testUrl = null);
     Task<BatchTestResult> TestNodesAsync(List<ProxyNode> nodes, int timeout = 5000);
-
-    /// <summary>
-    /// 测试节点是否可用
-    /// </summary>
+    Task<BatchTestResult> TestNodesAsync(List<Guid> nodeIds, int timeout = 5000, string? testUrl = null);
+    Task<BatchTestResult> TestAllNodesAsync(int timeout = 5000, string? testUrl = null);
+    Task<List<ProxyNode>> GetBestNodesAsync(int count = 5);
+    Task<Dictionary<string, int>> GetNodeStatisticsAsync();
     Task<bool> IsNodeAvailableAsync(ProxyNode node, int timeout = 5000);
 }
 
@@ -67,34 +62,34 @@ public interface ISystemTrayService
 }
 
 /// <summary>
+/// 代理进程状态
+/// </summary>
+public enum ProxyStatus
+{
+    Stopped,
+    Running,
+    Error
+}
+
+/// <summary>
 /// 代理进程管理器接口
 /// </summary>
 public interface IProxyProcessManager
 {
-    /// <summary>
-    /// 启动代理进程
-    /// </summary>
+    Task StartAsync(string? configContent = null);
+    Task StopAsync();
+    Task ReloadAsync(string configContent);
+    ProxyStatus GetStatus();
+    string GetLogs(int lastLines = 100);
+    void ClearLogs();
+    int? ProcessId { get; }
+    bool IsRunning { get; }
     Task<bool> StartProxyAsync();
-
-    /// <summary>
-    /// 停止代理进程
-    /// </summary>
     Task<bool> StopProxyAsync();
-
-    /// <summary>
-    /// 重启代理进程
-    /// </summary>
     Task<bool> RestartProxyAsync();
-
-    /// <summary>
-    /// 检查代理进程是否运行
-    /// </summary>
     bool IsProxyRunning();
-
-    /// <summary>
-    /// 更新代理配置
-    /// </summary>
     Task<bool> UpdateConfigurationAsync();
+    event EventHandler<string>? OnLogReceived;
 }
 
 /// <summary>
@@ -102,55 +97,23 @@ public interface IProxyProcessManager
 /// </summary>
 public interface INodeManagementService
 {
-    /// <summary>
-    /// 获取所有节点
-    /// </summary>
     Task<List<ProxyNode>> GetAllNodesAsync();
-
-    /// <summary>
-    /// 根据ID获取节点
-    /// </summary>
     Task<ProxyNode?> GetNodeByIdAsync(Guid id);
-
-    /// <summary>
-    /// 根据分组获取节点
-    /// </summary>
     Task<List<ProxyNode>> GetNodesByGroupAsync(Guid? groupId);
-
-    /// <summary>
-    /// 添加节点
-    /// </summary>
+    Task<ProxyNode> CreateNodeAsync(ProxyNode node);
+    Task<ProxyNode?> UpdateNodeAsync(Guid id, ProxyNode node);
     Task<bool> AddNodeAsync(ProxyNode node);
-
-    /// <summary>
-    /// 更新节点
-    /// </summary>
     Task<bool> UpdateNodeAsync(ProxyNode node);
-
-    /// <summary>
-    /// 删除节点
-    /// </summary>
     Task<bool> DeleteNodeAsync(Guid id);
-
-    /// <summary>
-    /// 获取所有节点组
-    /// </summary>
     Task<List<ProxyNodeGroup>> GetAllGroupsAsync();
-
-    /// <summary>
-    /// 添加节点组
-    /// </summary>
+    Task<ProxyNodeGroup?> GetGroupByIdAsync(Guid id);
+    Task<ProxyNodeGroup> CreateGroupAsync(ProxyNodeGroup group);
+    Task<ProxyNodeGroup?> UpdateGroupAsync(Guid id, ProxyNodeGroup group);
     Task<bool> AddGroupAsync(ProxyNodeGroup group);
-
-    /// <summary>
-    /// 更新节点组
-    /// </summary>
     Task<bool> UpdateGroupAsync(ProxyNodeGroup group);
-
-    /// <summary>
-    /// 删除节点组
-    /// </summary>
     Task<bool> DeleteGroupAsync(Guid id);
+    Task<NodeConfigResponse> GetNodeConfigAsync(Guid? groupId = null);
+    Task ApplyNodeConfigAsync(NodeConfigRequest request);
 }
 
 /// <summary>

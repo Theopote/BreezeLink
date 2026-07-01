@@ -13,11 +13,54 @@ public class NodeTestingService : INodeTestingService
 {
     private readonly ILogger<NodeTestingService> _logger;
     private readonly HttpClient _httpClient;
+    private readonly INodeManagementService _nodeManagement;
 
-    public NodeTestingService(ILogger<NodeTestingService> logger, HttpClient httpClient)
+    public NodeTestingService(
+        ILogger<NodeTestingService> logger,
+        HttpClient httpClient,
+        INodeManagementService nodeManagement)
     {
         _logger = logger;
         _httpClient = httpClient;
+        _nodeManagement = nodeManagement;
+    }
+
+    public Task<List<string>> ValidateNodeAsync(ProxyNode node)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(node.Name))
+        {
+            errors.Add("Node name is required");
+        }
+
+        if (string.IsNullOrWhiteSpace(node.Server))
+        {
+            errors.Add("Server address is required");
+        }
+
+        if (node.Port <= 0 || node.Port > 65535)
+        {
+            errors.Add("Port must be between 1 and 65535");
+        }
+
+        return Task.FromResult(errors);
+    }
+
+    public async Task<NodeTestResult> TestNodeAsync(Guid nodeId, int timeout = 5000, string? testUrl = null)
+    {
+        var node = await _nodeManagement.GetNodeByIdAsync(nodeId);
+        if (node == null)
+        {
+            return new NodeTestResult
+            {
+                NodeId = nodeId,
+                Status = NodeTestStatus.Failed,
+                ErrorMessage = "Node not found"
+            };
+        }
+
+        return await TestNodeAsync(node, timeout);
     }
 
     /// <summary>
@@ -77,6 +120,50 @@ public class NodeTestingService : INodeTestingService
         batchResult.FailedCount = results.Count(r => r.Status == NodeTestStatus.Failed);
 
         return batchResult;
+    }
+
+    public async Task<BatchTestResult> TestNodesAsync(List<Guid> nodeIds, int timeout = 5000, string? testUrl = null)
+    {
+        var nodes = new List<ProxyNode>();
+        foreach (var nodeId in nodeIds)
+        {
+            var node = await _nodeManagement.GetNodeByIdAsync(nodeId);
+            if (node != null)
+            {
+                nodes.Add(node);
+            }
+        }
+
+        return await TestNodesAsync(nodes, timeout);
+    }
+
+    public async Task<BatchTestResult> TestAllNodesAsync(int timeout = 5000, string? testUrl = null)
+    {
+        var nodes = await _nodeManagement.GetAllNodesAsync();
+        return await TestNodesAsync(nodes, timeout);
+    }
+
+    public async Task<List<ProxyNode>> GetBestNodesAsync(int count = 5)
+    {
+        var nodes = await _nodeManagement.GetAllNodesAsync();
+        return nodes
+            .Where(n => n.IsActive && n.TestStatus == NodeTestStatus.Success && n.LastLatency >= 0)
+            .OrderBy(n => n.LastLatency)
+            .Take(count)
+            .ToList();
+    }
+
+    public async Task<Dictionary<string, int>> GetNodeStatisticsAsync()
+    {
+        var nodes = await _nodeManagement.GetAllNodesAsync();
+        return new Dictionary<string, int>
+        {
+            ["total"] = nodes.Count,
+            ["active"] = nodes.Count(n => n.IsActive),
+            ["success"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Success),
+            ["failed"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Failed),
+            ["untested"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Pending)
+        };
     }
 
     /// <summary>

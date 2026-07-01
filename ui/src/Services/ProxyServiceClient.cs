@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using BreezeLink.CoreController.Models;
+using Microsoft.Extensions.Logging;
 
 namespace BreezeLink.UI.Services;
 
@@ -193,49 +194,16 @@ public class NotificationService
     /// </summary>
     public void ShowSuccess(string title, string message)
     {
-        try
-        {
-            var notification = new CommunityToolkit.WinUI.Notifications.ToastNotificationManager();
-            // 简化实现，实际应该使用 ToastNotification
-            _logger.LogInformation("Success: {Title} - {Message}", title, message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to show success notification");
-        }
+        _logger.LogInformation("Success: {Title} - {Message}", title, message);
     }
 
-    /// <summary>
-    /// 显示错误通知
-    /// </summary>
     public void ShowError(string title, string message)
     {
-        try
-        {
-            var notification = new CommunityToolkit.WinUI.Notifications.ToastNotificationManager();
-            // 简化实现，实际应该使用 ToastNotification
-            _logger.LogError("Error: {Title} - {Message}", title, message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to show error notification");
-        }
+        _logger.LogError("Error: {Title} - {Message}", title, message);
     }
 
-    /// <summary>
-    /// 显示警告通知
-    /// </summary>
     public void ShowWarning(string title, string message)
     {
-        try
-        {
-            var notification = new CommunityToolkit.WinUI.Notifications.ToastNotificationManager();
-            // 简化实现，实际应该使用 ToastNotification
-            _logger.LogWarning("Warning: {Title} - {Message}", title, message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to show warning notification");
-        }
+        _logger.LogWarning("Warning: {Title} - {Message}", title, message);
     }
 }

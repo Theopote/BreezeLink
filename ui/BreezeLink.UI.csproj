@@ -4,58 +4,31 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>BreezeLink.UI</RootNamespace>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x86;x64;ARM64</Platforms>
-    <RuntimeIdentifiers>win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
-    <PublishProfile>win10-$(Platform).pubxml</PublishProfile>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
-    <EnableMsixTooling>true</EnableMsixTooling>
-    <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
-    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
-    <PackageCertificateThumbprint>7B2E4B2B2E4B2B2E4B2B2E4B2B2E4B2B2E4B2B2E</PackageCertificateThumbprint>
-    <AppxPackageSigningTimestamp>2.5.2</AppxPackageSigningTimestamp>
-    <AppxSymbolPackageEnabled>False</AppxSymbolPackageEnabled>
-    <GenerateTestArtifacts>True</GenerateTestArtifacts>
-    <AppxBundle>Always</AppxBundle>
-    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
+    <WindowsPackageType>None</WindowsPackageType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="Views\**" />
-    <None Remove="ViewModels\**" />
-    <None Remove="Controls\**" />
-    <None Remove="Assets\**" />
-    <None Remove="Services\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Assets\SplashScreen.scale-200.png" />
-    <Content Include="Assets\LockScreenLogo.scale-200.png" />
-    <Content Include="Assets\Square150x150Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
-    <Content Include="Assets\StoreLogo.png" />
-    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.4.231008000" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.2428" />
-    <PackageReference Include="Win2D.WinUI" Version="1.0.4" />
-    <PackageReference Include="CommunityToolkit.WinUI.UI" Version="7.1.2" />
-    <PackageReference Include="CommunityToolkit.WinUI.UI.Controls" Version="7.1.2" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.240923002" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     <PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
-    <PackageReference Include="CommunityToolkit.WinUI.UI.Notifications" Version="7.1.2" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(DisableHasPackageAndPublishMenuAddition)'!='true'">
-    <Content Include="Assets\*.png" />
+  <ItemGroup>
+    <Compile Include="..\core-controller\src\Models\ApiModels.cs" Link="Models\ApiModels.cs" />
+    <Compile Include="..\core-controller\src\Models\NodeModels.cs" Link="Models\NodeModels.cs" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenu)'!='true'">
-    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
-  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="Assets\**\*" />
+  </ItemGroup>
 </Project>

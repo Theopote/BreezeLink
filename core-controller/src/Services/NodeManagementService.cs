@@ -45,6 +45,18 @@ public class NodeManagementService : INodeManagementService
     }
 
     /// <summary>
+    /// 根据分组获取节点
+    /// </summary>
+    public async Task<List<ProxyNode>> GetNodesByGroupAsync(Guid? groupId)
+    {
+        var nodes = groupId.HasValue
+            ? _nodes.Where(n => n.GroupId == groupId.Value)
+            : _nodes.AsEnumerable();
+
+        return await Task.FromResult(nodes.OrderBy(n => n.Name).ToList());
+    }
+
+    /// <summary>
     /// 添加节点
     /// </summary>
     public async Task<bool> AddNodeAsync(ProxyNode node)

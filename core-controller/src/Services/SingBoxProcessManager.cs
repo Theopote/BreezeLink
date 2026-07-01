@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using BreezeLink.CoreController.Models;
 using Microsoft.Extensions.Logging;
 
 namespace BreezeLink.CoreController.Services;
@@ -94,7 +95,7 @@ public class SingBoxProcessManager : IProxyProcessManager
         return IsRunning;
     }
 
-    private bool IsRunning => _singBoxProcess != null && !_singBoxProcess.HasExited;
+    public bool IsRunning => _singBoxProcess != null && !_singBoxProcess.HasExited;
 
     /// <summary>
     /// 启动 sing-box 进程
@@ -344,27 +345,4 @@ public class SingBoxProcessManager : IProxyProcessManager
 
         OnLogReceived?.Invoke(this, formattedMessage);
     }
-}
-
-/// <summary>
-/// 代理进程状态枚举
-/// </summary>
-public enum ProxyStatus
-{
-    Stopped,
-    Running,
-    Error
-}
-
-/// <summary>
-/// 代理进程管理器接口
-/// </summary>
-public interface IProxyProcessManager
-{
-    Task<bool> StartProxyAsync();
-    Task<bool> StopProxyAsync();
-    Task<bool> RestartProxyAsync();
-    bool IsProxyRunning();
-    Task<bool> UpdateConfigurationAsync();
-    event EventHandler<string>? OnLogReceived;
 }

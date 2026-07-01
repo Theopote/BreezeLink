@@ -73,7 +73,7 @@ public partial class NodeManagementViewModel : ObservableObject
     /// 加载所有数据
     /// </summary>
     [RelayCommand]
-    private async Task LoadDataAsync()
+    public async Task LoadDataAsync()
     {
         if (IsLoading) return;
 
@@ -203,37 +203,24 @@ public partial class NodeManagementViewModel : ObservableObject
             return;
         }
 
-        var dialog = new ContentDialog()
+        try
         {
-            Title = "确认删除",
-            Content = $"确定要删除节点 \"{node.Name}\" 吗？",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            XamlRoot = App.Current.Window.Content.XamlRoot
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary)
+            var response = await _nodeClient.DeleteNodeAsync(node.Id);
+            if (response?.Success == true)
+            {
+                _notificationService.ShowSuccess("删除节点", "节点删除成功");
+                await LoadNodesAsync();
+                await LoadStatisticsAsync();
+            }
+            else
+            {
+                _notificationService.ShowError("删除节点", response?.Message ?? "删除失败");
+            }
+        }
+        catch (Exception ex)
         {
-            try
-            {
-                var response = await _nodeClient.DeleteNodeAsync(node.Id);
-                if (response?.Success == true)
-                {
-                    _notificationService.ShowSuccess("删除节点", "节点删除成功");
-                    await LoadNodesAsync();
-                    await LoadStatisticsAsync();
-                }
-                else
-                {
-                    _notificationService.ShowError("删除节点", response?.Message ?? "删除失败");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to delete node {NodeId}", node.Id);
-                _notificationService.ShowError("删除节点", $"删除异常: {ex.Message}");
-            }
+            _logger.LogError(ex, "Failed to delete node {NodeId}", node.Id);
+            _notificationService.ShowError("删除节点", $"删除异常: {ex.Message}");
         }
     }
 
@@ -312,51 +299,27 @@ public partial class NodeManagementViewModel : ObservableObject
     [RelayCommand]
     private async Task CreateGroupAsync()
     {
-        var dialog = new ContentDialog()
+        const string groupName = "新分组";
+
+        try
         {
-            Title = "创建分组",
-            Content = new TextBox
-            {
-                PlaceholderText = "请输入分组名称",
-                Text = ""
-            },
-            PrimaryButtonText = "创建",
-            CloseButtonText = "取消",
-            XamlRoot = App.Current.Window.Content.XamlRoot
-        };
+            var group = new ProxyNodeGroup { Name = groupName };
+            var response = await _nodeClient.CreateGroupAsync(group);
 
-        var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary)
+            if (response?.Success == true)
+            {
+                _notificationService.ShowSuccess("创建分组", "分组创建成功");
+                await LoadDataAsync();
+            }
+            else
+            {
+                _notificationService.ShowError("创建分组", response?.Message ?? "创建失败");
+            }
+        }
+        catch (Exception ex)
         {
-            var textBox = dialog.Content as TextBox;
-            var groupName = textBox?.Text?.Trim();
-
-            if (string.IsNullOrEmpty(groupName))
-            {
-                _notificationService.ShowError("创建分组", "分组名称不能为空");
-                return;
-            }
-
-            try
-            {
-                var group = new ProxyNodeGroup { Name = groupName };
-                var response = await _nodeClient.CreateGroupAsync(group);
-
-                if (response?.Success == true)
-                {
-                    _notificationService.ShowSuccess("创建分组", "分组创建成功");
-                    await LoadDataAsync();
-                }
-                else
-                {
-                    _notificationService.ShowError("创建分组", response?.Message ?? "创建失败");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to create group");
-                _notificationService.ShowError("创建分组", $"创建异常: {ex.Message}");
-            }
+            _logger.LogError(ex, "Failed to create group");
+            _notificationService.ShowError("创建分组", $"创建异常: {ex.Message}");
         }
     }
 
@@ -378,36 +341,23 @@ public partial class NodeManagementViewModel : ObservableObject
             return;
         }
 
-        var dialog = new ContentDialog()
+        try
         {
-            Title = "确认删除",
-            Content = $"确定要删除分组 \"{group.Name}\" 吗？\n\n注意：该分组下的节点将被移到默认分组。",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            XamlRoot = App.Current.Window.Content.XamlRoot
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary)
+            var response = await _nodeClient.DeleteGroupAsync(group.Id);
+            if (response?.Success == true)
+            {
+                _notificationService.ShowSuccess("删除分组", "分组删除成功");
+                await LoadDataAsync();
+            }
+            else
+            {
+                _notificationService.ShowError("删除分组", response?.Message ?? "删除失败");
+            }
+        }
+        catch (Exception ex)
         {
-            try
-            {
-                var response = await _nodeClient.DeleteGroupAsync(group.Id);
-                if (response?.Success == true)
-                {
-                    _notificationService.ShowSuccess("删除分组", "分组删除成功");
-                    await LoadDataAsync();
-                }
-                else
-                {
-                    _notificationService.ShowError("删除分组", response?.Message ?? "删除失败");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to delete group {GroupId}", group.Id);
-                _notificationService.ShowError("删除分组", $"删除异常: {ex.Message}");
-            }
+            _logger.LogError(ex, "Failed to delete group {GroupId}", group.Id);
+            _notificationService.ShowError("删除分组", $"删除异常: {ex.Message}");
         }
     }
 

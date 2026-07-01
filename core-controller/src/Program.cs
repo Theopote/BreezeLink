@@ -8,6 +8,8 @@ using BreezeLink.CoreController.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.WebHost.UseUrls("http://localhost:8800");
+
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -51,7 +53,6 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseAuthorization();
 
