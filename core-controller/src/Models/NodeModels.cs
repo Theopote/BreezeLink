@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Nodes;
 
 namespace BreezeLink.CoreController.Models;
 
@@ -96,20 +97,22 @@ public class ProxyNode
 
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 
-    // 转换为 sing-box 配置
-    public Dictionary<string, object> ToSingBoxOutbound()
+    public JsonObject ToSingBoxOutbound()
     {
-        var outbound = new Dictionary<string, object>
+        var outbound = new JsonObject
         {
-            ["type"] = Type.ToString().ToLower(),
-            ["tag"] = Tag ?? Name,
+            ["type"] = ToSingBoxType(Type),
+            ["tag"] = string.IsNullOrWhiteSpace(Tag) ? Name : Tag,
             ["server"] = Server,
             ["server_port"] = Port
         };
 
+        var tls = BuildTls();
+
         switch (Type)
         {
             case ProxyNodeType.Shadowsocks:
+            case ProxyNodeType.ShadowsocksR:
                 outbound["method"] = Method ?? "aes-256-gcm";
                 outbound["password"] = Password ?? "";
                 break;
@@ -118,38 +121,38 @@ public class ProxyNode
                 outbound["uuid"] = UUID ?? "";
                 outbound["alter_id"] = int.TryParse(AlterId, out int alterId) ? alterId : 0;
                 outbound["security"] = Security ?? "auto";
+                if (tls != null) outbound["tls"] = tls;
                 break;
 
             case ProxyNodeType.VLESS:
                 outbound["uuid"] = UUID ?? "";
-                outbound["flow"] = "";
-                if (!string.IsNullOrEmpty(SNI))
-                    outbound["tls"] = new Dictionary<string, object>
-                    {
-                        ["enabled"] = true,
-                        ["server_name"] = SNI,
-                        ["insecure"] = AllowInsecure
-                    };
+                if (!string.IsNullOrEmpty(Method))
+                    outbound["flow"] = Method;
+                if (tls != null) outbound["tls"] = tls;
                 break;
 
             case ProxyNodeType.Trojan:
                 outbound["password"] = Password ?? "";
-                if (!string.IsNullOrEmpty(SNI))
-                    outbound["tls"] = new Dictionary<string, object>
-                    {
-                        ["enabled"] = true,
-                        ["server_name"] = SNI,
-                        ["insecure"] = AllowInsecure
-                    };
+                outbound["tls"] = tls ?? new JsonObject
+                {
+                    ["enabled"] = true,
+                    ["insecure"] = AllowInsecure || SkipCertVerify
+                };
+                break;
+
+            case ProxyNodeType.Hysteria:
+            case ProxyNodeType.Hysteria2:
+                outbound["password"] = Password ?? "";
+                if (tls != null) outbound["tls"] = tls;
+                break;
+
+            case ProxyNodeType.TUIC:
+                outbound["uuid"] = UUID ?? "";
+                outbound["password"] = Password ?? "";
+                if (tls != null) outbound["tls"] = tls;
                 break;
 
             case ProxyNodeType.SOCKS5:
-                if (!string.IsNullOrEmpty(Username))
-                    outbound["username"] = Username;
-                if (!string.IsNullOrEmpty(Password))
-                    outbound["password"] = Password;
-                break;
-
             case ProxyNodeType.HTTP:
                 if (!string.IsNullOrEmpty(Username))
                     outbound["username"] = Username;
@@ -159,6 +162,46 @@ public class ProxyNode
         }
 
         return outbound;
+    }
+
+    public static string ToSingBoxType(ProxyNodeType type) => type switch
+    {
+        ProxyNodeType.Shadowsocks => "shadowsocks",
+        ProxyNodeType.ShadowsocksR => "shadowsocks",
+        ProxyNodeType.VMess => "vmess",
+        ProxyNodeType.VLESS => "vless",
+        ProxyNodeType.Trojan => "trojan",
+        ProxyNodeType.Hysteria => "hysteria",
+        ProxyNodeType.Hysteria2 => "hysteria2",
+        ProxyNodeType.TUIC => "tuic",
+        ProxyNodeType.SOCKS5 => "socks",
+        ProxyNodeType.HTTP => "http",
+        _ => type.ToString().ToLowerInvariant()
+    };
+
+    private JsonObject? BuildTls()
+    {
+        if (string.IsNullOrWhiteSpace(SNI) && !AllowInsecure && !SkipCertVerify && string.IsNullOrWhiteSpace(Alpn))
+            return null;
+
+        var tls = new JsonObject
+        {
+            ["enabled"] = true,
+            ["insecure"] = AllowInsecure || SkipCertVerify
+        };
+
+        if (!string.IsNullOrWhiteSpace(SNI))
+            tls["server_name"] = SNI;
+
+        if (!string.IsNullOrWhiteSpace(Alpn))
+        {
+            var alpn = new JsonArray();
+            foreach (var item in Alpn.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                alpn.Add(item);
+            tls["alpn"] = alpn;
+        }
+
+        return tls;
     }
 }
 

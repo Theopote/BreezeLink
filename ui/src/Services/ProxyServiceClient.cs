@@ -1,14 +1,10 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 using BreezeLink.CoreController.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml.Controls;
 
 namespace BreezeLink.UI.Services;
 
-/// <summary>
-/// 代理服务客户端
-/// 负责与后端 API 通信
-/// </summary>
 public class ProxyServiceClient
 {
     private readonly HttpClient _httpClient;
@@ -18,155 +14,58 @@ public class ProxyServiceClient
     {
         _httpClient = httpClient;
         _logger = logger;
-        _httpClient.BaseAddress = new Uri("http://127.0.0.1:8800");
-        _httpClient.Timeout = TimeSpan.FromSeconds(30);
+        _httpClient.BaseAddress ??= new Uri("http://127.0.0.1:8800");
+        if (_httpClient.Timeout == Timeout.InfiniteTimeSpan)
+            _httpClient.Timeout = TimeSpan.FromSeconds(30);
     }
 
-    /// <summary>
-    /// 启动代理
-    /// </summary>
     public async Task<ApiResponse<ProxyStatusResponse>?> StartProxyAsync(string? configContent = null)
     {
-        try
-        {
-            var request = new StartProxyRequest { ConfigContent = configContent };
-            var response = await _httpClient.PostAsJsonAsync("/api/proxy/start", request);
-
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-            }
-            else
-            {
-                var errorResponse = await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-                _logger.LogError("Failed to start proxy: {Error}", errorResponse?.Message);
-                return errorResponse;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error starting proxy");
-            return ApiResponse<ProxyStatusResponse>.Error($"Connection error: {ex.Message}");
-        }
+        return await SendAsync<StartProxyRequest, ProxyStatusResponse>(
+            HttpMethod.Post, "/api/proxy/start", new StartProxyRequest { ConfigContent = configContent }, "start proxy");
     }
 
-    /// <summary>
-    /// 停止代理
-    /// </summary>
     public async Task<ApiResponse<object>?> StopProxyAsync()
+    {
+        return await SendAsync<StopProxyRequest, object>(
+            HttpMethod.Post, "/api/proxy/stop", new StopProxyRequest(), "stop proxy");
+    }
+
+    public async Task<ApiResponse<ProxyStatusResponse>?> ReloadProxyAsync(string? configContent = null)
+    {
+        return await SendAsync<StartProxyRequest, ProxyStatusResponse>(
+            HttpMethod.Post, "/api/proxy/reload", new StartProxyRequest { ConfigContent = configContent }, "reload proxy");
+    }
+
+    public Task<ApiResponse<ProxyStatusResponse>?> GetProxyStatusAsync()
+        => GetAsync<ProxyStatusResponse>("/api/proxy/status", "get proxy status");
+
+    public Task<ApiResponse<LogsResponse>?> GetProxyLogsAsync(int lastLines = 100)
+        => GetAsync<LogsResponse>($"/api/proxy/logs?lastLines={lastLines}", "get proxy logs");
+
+    public Task<ApiResponse<TrafficStats>?> GetTrafficAsync()
+        => GetAsync<TrafficStats>("/api/proxy/traffic", "get traffic");
+
+    public async Task<ApiResponse<object>?> ClearLogsAsync()
     {
         try
         {
-            var response = await _httpClient.PostAsJsonAsync("/api/proxy/stop", new StopProxyRequest());
-
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<ApiResponse<object>>();
-            }
-            else
-            {
-                var errorResponse = await response.Content.ReadFromJsonAsync<ApiResponse<object>>();
-                _logger.LogError("Failed to stop proxy: {Error}", errorResponse?.Message);
-                return errorResponse;
-            }
+            var response = await _httpClient.DeleteAsync("/api/proxy/logs");
+            return await response.Content.ReadFromJsonAsync<ApiResponse<object>>(JsonOptions.Default);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error stopping proxy");
+            _logger.LogError(ex, "Error clearing logs");
             return ApiResponse<object>.Error($"Connection error: {ex.Message}");
         }
     }
 
-    /// <summary>
-    /// 重载代理配置
-    /// </summary>
-    public async Task<ApiResponse<ProxyStatusResponse>?> ReloadProxyAsync(string configContent)
-    {
-        try
-        {
-            var request = new StartProxyRequest { ConfigContent = configContent };
-            var response = await _httpClient.PostAsJsonAsync("/api/proxy/reload", request);
-
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-            }
-            else
-            {
-                var errorResponse = await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-                _logger.LogError("Failed to reload proxy: {Error}", errorResponse?.Message);
-                return errorResponse;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error reloading proxy");
-            return ApiResponse<ProxyStatusResponse>.Error($"Connection error: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 获取代理状态
-    /// </summary>
-    public async Task<ApiResponse<ProxyStatusResponse>?> GetProxyStatusAsync()
-    {
-        try
-        {
-            var response = await _httpClient.GetAsync("/api/proxy/status");
-
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-            }
-            else
-            {
-                var errorResponse = await response.Content.ReadFromJsonAsync<ApiResponse<ProxyStatusResponse>>();
-                _logger.LogError("Failed to get proxy status: {Error}", errorResponse?.Message);
-                return errorResponse;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting proxy status");
-            return ApiResponse<ProxyStatusResponse>.Error($"Connection error: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 获取代理日志
-    /// </summary>
-    public async Task<ApiResponse<LogsResponse>?> GetProxyLogsAsync(int lastLines = 100)
-    {
-        try
-        {
-            var response = await _httpClient.GetAsync($"/api/proxy/logs?lastLines={lastLines}");
-
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<ApiResponse<LogsResponse>>();
-            }
-            else
-            {
-                var errorResponse = await response.Content.ReadFromJsonAsync<ApiResponse<LogsResponse>>();
-                _logger.LogError("Failed to get proxy logs: {Error}", errorResponse?.Message);
-                return errorResponse;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting proxy logs");
-            return ApiResponse<LogsResponse>.Error($"Connection error: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 健康检查
-    /// </summary>
     public async Task<bool> HealthCheckAsync()
     {
         try
         {
-            var response = await _httpClient.GetAsync("/api/proxy/health");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var response = await _httpClient.GetAsync("/api/proxy/health", cts.Token);
             return response.IsSuccessStatusCode;
         }
         catch
@@ -174,36 +73,88 @@ public class ProxyServiceClient
             return false;
         }
     }
+
+    private async Task<ApiResponse<T>?> GetAsync<T>(string url, string action)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync(url);
+            return await response.Content.ReadFromJsonAsync<ApiResponse<T>>(JsonOptions.Default);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error: {Action}", action);
+            return ApiResponse<T>.Error($"Connection error: {ex.Message}");
+        }
+    }
+
+    private async Task<ApiResponse<TResponse>?> SendAsync<TRequest, TResponse>(HttpMethod method, string url, TRequest body, string action)
+    {
+        try
+        {
+            var request = new HttpRequestMessage(method, url)
+            {
+                Content = JsonContent.Create(body, options: JsonOptions.Default)
+            };
+            var response = await _httpClient.SendAsync(request);
+            return await response.Content.ReadFromJsonAsync<ApiResponse<TResponse>>(JsonOptions.Default);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error: {Action}", action);
+            return ApiResponse<TResponse>.Error($"Connection error: {ex.Message}");
+        }
+    }
 }
 
-/// <summary>
-/// 通知服务
-/// 负责显示系统通知
-/// </summary>
+public class AppNotificationEventArgs : EventArgs
+{
+    public string Title { get; }
+    public string Message { get; }
+    public InfoBarSeverity Severity { get; }
+
+    public AppNotificationEventArgs(string title, string message, InfoBarSeverity severity)
+    {
+        Title = title;
+        Message = message;
+        Severity = severity;
+    }
+}
+
 public class NotificationService
 {
     private readonly ILogger<NotificationService> _logger;
+
+    public event EventHandler<AppNotificationEventArgs>? NotificationRaised;
 
     public NotificationService(ILogger<NotificationService> logger)
     {
         _logger = logger;
     }
 
-    /// <summary>
-    /// 显示成功通知
-    /// </summary>
-    public void ShowSuccess(string title, string message)
-    {
-        _logger.LogInformation("Success: {Title} - {Message}", title, message);
-    }
+    public void ShowSuccess(string title, string message) => Raise(title, message, InfoBarSeverity.Success);
 
-    public void ShowError(string title, string message)
-    {
-        _logger.LogError("Error: {Title} - {Message}", title, message);
-    }
+    public void ShowError(string title, string message) => Raise(title, message, InfoBarSeverity.Error);
 
-    public void ShowWarning(string title, string message)
+    public void ShowWarning(string title, string message) => Raise(title, message, InfoBarSeverity.Warning);
+
+    public void ShowInfo(string title, string message) => Raise(title, message, InfoBarSeverity.Informational);
+
+    private void Raise(string title, string message, InfoBarSeverity severity)
     {
-        _logger.LogWarning("Warning: {Title} - {Message}", title, message);
+        switch (severity)
+        {
+            case InfoBarSeverity.Error:
+                _logger.LogError("{Title} - {Message}", title, message);
+                break;
+            case InfoBarSeverity.Warning:
+                _logger.LogWarning("{Title} - {Message}", title, message);
+                break;
+            default:
+                _logger.LogInformation("{Title} - {Message}", title, message);
+                break;
+        }
+
+        NotificationRaised?.Invoke(this, new AppNotificationEventArgs(title, message, severity));
     }
 }

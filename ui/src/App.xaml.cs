@@ -37,8 +37,6 @@ public partial class App : Application
             client.Timeout = TimeSpan.FromSeconds(30);
         });
 
-        services.AddSingleton<ProxyServiceClient>();
-        services.AddSingleton<NodeManagementClient>();
         services.AddSingleton<NotificationService>();
 
         Services = services.BuildServiceProvider();

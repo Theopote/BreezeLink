@@ -4,36 +4,75 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="节点管理"
     PrimaryButtonText="关闭"
-    PrimaryButtonClick="ContentDialog_PrimaryButtonClick">
+    DefaultButton="Primary">
 
-    <ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="16" Padding="8">
-            <TextBlock Text="节点列表" FontSize="16" FontWeight="SemiBold"/>
+    <ScrollViewer MaxHeight="640" VerticalScrollBarVisibility="Auto" Width="640">
+        <StackPanel Spacing="16" Padding="4">
+            <TextBlock Text="{x:Bind ViewModel.StatisticsText, Mode=OneWay}" Opacity="0.8"/>
 
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="刷新" Command="{x:Bind ViewModel.LoadDataCommand}"/>
-                <Button Content="批量测试" Command="{x:Bind ViewModel.TestAllNodesCommand}"/>
-            </StackPanel>
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox PlaceholderText="搜索名称 / 服务器"
+                         Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                <Button Grid.Column="1" Content="刷新" Command="{x:Bind ViewModel.LoadDataCommand}"/>
+                <Button Grid.Column="2" Content="批量测试" Command="{x:Bind ViewModel.TestAllNodesCommand}"/>
+                <Button Grid.Column="3" Content="新建分组" Command="{x:Bind ViewModel.CreateGroupCommand}"/>
+            </Grid>
 
-            <ListView ItemsSource="{x:Bind ViewModel.Nodes}"
+            <ComboBox Header="分组"
+                      ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}"
+                      SelectedItem="{x:Bind ViewModel.SelectedGroup, Mode=TwoWay}"
+                      DisplayMemberPath="Name"
+                      HorizontalAlignment="Stretch"/>
+
+            <ListView ItemsSource="{x:Bind ViewModel.Nodes, Mode=OneWay}"
                       SelectedItem="{x:Bind ViewModel.SelectedNode, Mode=TwoWay}"
-                      Height="280">
+                      Height="240">
+                <ListView.Header>
+                    <Grid Padding="12,4" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="名称" Opacity="0.6"/>
+                        <TextBlock Grid.Column="1" Text="协议" Opacity="0.6"/>
+                        <TextBlock Grid.Column="2" Text="服务器" Opacity="0.6"/>
+                        <TextBlock Grid.Column="3" Text="端口" Opacity="0.6"/>
+                        <TextBlock Grid.Column="4" Text="延迟" Opacity="0.6"/>
+                    </Grid>
+                </ListView.Header>
                 <ListView.ItemTemplate>
                     <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <TextBlock Text="{Binding Name}" Width="120"/>
-                            <TextBlock Text="{Binding Type}" Width="80"/>
-                            <TextBlock Text="{Binding Server}" Width="140"/>
-                            <TextBlock Text="{Binding Port}" Width="60"/>
-                            <TextBlock Text="{Binding LastLatency}" Width="60"/>
-                        </StackPanel>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="140"/>
+                                <ColumnDefinition Width="90"/>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Type}"/>
+                            <TextBlock Grid.Column="2" Text="{Binding Server}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Grid.Column="3" Text="{Binding Port}"/>
+                            <TextBlock Grid.Column="4" Text="{Binding LastLatency}"/>
+                        </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
 
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="测试选中" Command="{x:Bind ViewModel.TestNodeCommand}" CommandParameter="{x:Bind ViewModel.SelectedNode}"/>
-                <Button Content="删除选中" Command="{x:Bind ViewModel.DeleteNodeCommand}" CommandParameter="{x:Bind ViewModel.SelectedNode}"/>
+                <Button Content="测试选中" Command="{x:Bind ViewModel.TestNodeCommand}"/>
+                <Button Content="删除选中" Command="{x:Bind ViewModel.DeleteNodeCommand}"/>
+                <Button Content="删除分组" Command="{x:Bind ViewModel.DeleteGroupCommand}"/>
             </StackPanel>
 
             <TextBlock Text="创建节点" FontSize="16" FontWeight="SemiBold"/>
@@ -43,17 +82,32 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBox Grid.Row="0" Grid.Column="0" Header="名称" Text="{x:Bind ViewModel.NewNodeName, Mode=TwoWay}"/>
-                <TextBox Grid.Row="0" Grid.Column="1" Header="服务器" Text="{x:Bind ViewModel.NewNodeServer, Mode=TwoWay}"/>
-                <NumberBox Grid.Row="1" Grid.Column="0" Header="端口" Value="{x:Bind ViewModel.NewNodePort, Mode=TwoWay}" Minimum="1" Maximum="65535"/>
-                <TextBox Grid.Row="1" Grid.Column="1" Header="密码" Text="{x:Bind ViewModel.NewNodePassword, Mode=TwoWay}"/>
-                <Button Grid.Row="2" Grid.Column="1" Content="创建节点" Command="{x:Bind ViewModel.CreateNodeCommand}" HorizontalAlignment="Right"/>
+                <TextBox Grid.Row="0" Grid.Column="0" Header="名称"
+                         Text="{x:Bind ViewModel.NewNodeName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                <TextBox Grid.Row="0" Grid.Column="1" Header="服务器"
+                         Text="{x:Bind ViewModel.NewNodeServer, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                <NumberBox Grid.Row="1" Grid.Column="0" Header="端口"
+                           Value="{x:Bind ViewModel.NewNodePort, Mode=TwoWay}"
+                           Minimum="1" Maximum="65535" SpinButtonPlacementMode="Compact"/>
+                <ComboBox Grid.Row="1" Grid.Column="1" Header="协议"
+                          ItemsSource="{x:Bind ViewModel.NodeTypes}"
+                          SelectedItem="{x:Bind ViewModel.SelectedNodeType, Mode=TwoWay}"
+                          HorizontalAlignment="Stretch"/>
+                <TextBox Grid.Row="2" Grid.Column="0" Header="密码"
+                         Text="{x:Bind ViewModel.NewNodePassword, Mode=TwoWay}"/>
+                <TextBox Grid.Row="2" Grid.Column="1" Header="UUID / 加密"
+                         Text="{x:Bind ViewModel.NewNodeUUID, Mode=TwoWay}"/>
+                <Button Grid.Row="3" Grid.Column="1" Content="创建节点"
+                        Command="{x:Bind ViewModel.CreateNodeCommand}"
+                        HorizontalAlignment="Right"
+                        Style="{StaticResource AccentButtonStyle}"/>
             </Grid>
         </StackPanel>
     </ScrollViewer>

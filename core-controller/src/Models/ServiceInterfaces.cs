@@ -89,6 +89,7 @@ public interface IProxyProcessManager
     Task<bool> RestartProxyAsync();
     bool IsProxyRunning();
     Task<bool> UpdateConfigurationAsync();
+    DateTime? StartTime { get; }
     event EventHandler<string>? OnLogReceived;
 }
 
@@ -114,14 +115,13 @@ public interface INodeManagementService
     Task<bool> DeleteGroupAsync(Guid id);
     Task<NodeConfigResponse> GetNodeConfigAsync(Guid? groupId = null);
     Task ApplyNodeConfigAsync(NodeConfigRequest request);
+    Task UpdateNodesStatusAsync(List<(Guid NodeId, int Latency, NodeTestStatus Status)> updates);
 }
 
 /// <summary>
-/// 流量统计模型
+/// 根据节点生成 sing-box 配置
 /// </summary>
-public class TrafficStats
+public interface ISingBoxConfigService
 {
-    public long UploadBytes { get; set; }
-    public long DownloadBytes { get; set; }
-    public DateTime LastUpdateTime { get; set; } = DateTime.Now;
+    Task<string> BuildConfigAsync();
 }

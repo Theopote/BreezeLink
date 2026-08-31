@@ -5,60 +5,69 @@ using BreezeLink.CoreController.Models;
 namespace BreezeLink.CoreController.Services;
 
 /// <summary>
-/// 节点管理服务
-/// 负责代理节点的存储、管理和测试
+/// 节点管理服务。内存列表 + JSON 文件持久化，所有读写都经过同一把锁。
 /// </summary>
 public class NodeManagementService : INodeManagementService
 {
     private readonly ILogger<NodeManagementService> _logger;
     private readonly string _nodesFilePath;
     private readonly string _groupsFilePath;
+    private readonly SemaphoreSlim _lock = new(1, 1);
     private List<ProxyNode> _nodes = new();
     private List<ProxyNodeGroup> _groups = new();
 
     public NodeManagementService(ILogger<NodeManagementService> logger)
     {
         _logger = logger;
-        _nodesFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "nodes.json");
-        _groupsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "groups.json");
-
-        Directory.CreateDirectory(Path.GetDirectoryName(_nodesFilePath)!);
+        var dataDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+        Directory.CreateDirectory(dataDir);
+        _nodesFilePath = Path.Combine(dataDir, "nodes.json");
+        _groupsFilePath = Path.Combine(dataDir, "groups.json");
         LoadData();
     }
 
-    #region 节点管理
-
-    /// <summary>
-    /// 获取所有节点
-    /// </summary>
     public async Task<List<ProxyNode>> GetAllNodesAsync()
     {
-        return await Task.FromResult(_nodes.OrderBy(n => n.Name).ToList());
+        await _lock.WaitAsync();
+        try
+        {
+            return _nodes.OrderBy(n => n.Name).ToList();
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 根据ID获取节点
-    /// </summary>
     public async Task<ProxyNode?> GetNodeByIdAsync(Guid id)
     {
-        return await Task.FromResult(_nodes.FirstOrDefault(n => n.Id == id));
+        await _lock.WaitAsync();
+        try
+        {
+            return Clone(_nodes.FirstOrDefault(n => n.Id == id));
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 根据分组获取节点
-    /// </summary>
     public async Task<List<ProxyNode>> GetNodesByGroupAsync(Guid? groupId)
     {
-        var nodes = groupId.HasValue
-            ? _nodes.Where(n => n.GroupId == groupId.Value)
-            : _nodes.AsEnumerable();
-
-        return await Task.FromResult(nodes.OrderBy(n => n.Name).ToList());
+        await _lock.WaitAsync();
+        try
+        {
+            var query = groupId.HasValue
+                ? _nodes.Where(n => n.GroupId == groupId.Value)
+                : _nodes.AsEnumerable();
+            return query.OrderBy(n => n.Name).ToList();
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 添加节点
-    /// </summary>
     public async Task<bool> AddNodeAsync(ProxyNode node)
     {
         try
@@ -73,15 +82,11 @@ public class NodeManagementService : INodeManagementService
         }
     }
 
-    /// <summary>
-    /// 更新节点
-    /// </summary>
     public async Task<bool> UpdateNodeAsync(ProxyNode node)
     {
         try
         {
-            var result = await UpdateNodeAsync(node.Id, node);
-            return result != null;
+            return await UpdateNodeAsync(node.Id, node) != null;
         }
         catch (Exception ex)
         {
@@ -90,9 +95,6 @@ public class NodeManagementService : INodeManagementService
         }
     }
 
-    /// <summary>
-    /// 添加节点组
-    /// </summary>
     public async Task<bool> AddGroupAsync(ProxyNodeGroup group)
     {
         try
@@ -107,15 +109,11 @@ public class NodeManagementService : INodeManagementService
         }
     }
 
-    /// <summary>
-    /// 更新节点组
-    /// </summary>
     public async Task<bool> UpdateGroupAsync(ProxyNodeGroup group)
     {
         try
         {
-            var result = await UpdateGroupAsync(group.Id, group);
-            return result != null;
+            return await UpdateGroupAsync(group.Id, group) != null;
         }
         catch (Exception ex)
         {
@@ -124,177 +122,219 @@ public class NodeManagementService : INodeManagementService
         }
     }
 
-    /// <summary>
-    /// 创建节点
-    /// </summary>
     public async Task<ProxyNode> CreateNodeAsync(ProxyNode node)
     {
-        node.Id = Guid.NewGuid();
-        node.CreatedAt = DateTime.Now;
-        node.UpdatedAt = DateTime.Now;
+        await _lock.WaitAsync();
+        try
+        {
+            if (node.Id == Guid.Empty)
+                node.Id = Guid.NewGuid();
+            node.CreatedAt = DateTime.Now;
+            node.UpdatedAt = DateTime.Now;
 
-        _nodes.Add(node);
-        await SaveNodesAsync();
+            if (!node.GroupId.HasValue)
+            {
+                var defaultGroup = _groups.FirstOrDefault(g => g.IsDefault);
+                if (defaultGroup != null)
+                    node.GroupId = defaultGroup.Id;
+            }
 
-        _logger.LogInformation("Created node: {NodeName} ({NodeId})", node.Name, node.Id);
-        return node;
+            _nodes.Add(node);
+            await SaveNodesUnlockedAsync();
+            _logger.LogInformation("Created node: {NodeName} ({NodeId})", node.Name, node.Id);
+            return node;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 更新节点
-    /// </summary>
     public async Task<ProxyNode?> UpdateNodeAsync(Guid id, ProxyNode node)
     {
-        var existingNode = _nodes.FirstOrDefault(n => n.Id == id);
-        if (existingNode == null)
-            return null;
+        await _lock.WaitAsync();
+        try
+        {
+            var existingNode = _nodes.FirstOrDefault(n => n.Id == id);
+            if (existingNode == null)
+                return null;
 
-        existingNode.Name = node.Name;
-        existingNode.Type = node.Type;
-        existingNode.Server = node.Server;
-        existingNode.Port = node.Port;
-        existingNode.Username = node.Username;
-        existingNode.Password = node.Password;
-        existingNode.Method = node.Method;
-        existingNode.UUID = node.UUID;
-        existingNode.AlterId = node.AlterId;
-        existingNode.Security = node.Security;
-        existingNode.SNI = node.SNI;
-        existingNode.Alpn = node.Alpn;
-        existingNode.AllowInsecure = node.AllowInsecure;
-        existingNode.SkipCertVerify = node.SkipCertVerify;
-        existingNode.Tag = node.Tag;
-        existingNode.GroupId = node.GroupId;
-        existingNode.IsActive = node.IsActive;
-        existingNode.UpdatedAt = DateTime.Now;
+            existingNode.Name = node.Name;
+            existingNode.Type = node.Type;
+            existingNode.Server = node.Server;
+            existingNode.Port = node.Port;
+            existingNode.Username = node.Username;
+            existingNode.Password = node.Password;
+            existingNode.Method = node.Method;
+            existingNode.UUID = node.UUID;
+            existingNode.AlterId = node.AlterId;
+            existingNode.Security = node.Security;
+            existingNode.SNI = node.SNI;
+            existingNode.Alpn = node.Alpn;
+            existingNode.AllowInsecure = node.AllowInsecure;
+            existingNode.SkipCertVerify = node.SkipCertVerify;
+            existingNode.Tag = node.Tag;
+            existingNode.GroupId = node.GroupId;
+            existingNode.IsActive = node.IsActive;
+            existingNode.UpdatedAt = DateTime.Now;
 
-        await SaveNodesAsync();
-
-        _logger.LogInformation("Updated node: {NodeName} ({NodeId})", existingNode.Name, existingNode.Id);
-        return existingNode;
+            await SaveNodesUnlockedAsync();
+            _logger.LogInformation("Updated node: {NodeName} ({NodeId})", existingNode.Name, existingNode.Id);
+            return existingNode;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 删除节点
-    /// </summary>
     public async Task<bool> DeleteNodeAsync(Guid id)
     {
-        var node = _nodes.FirstOrDefault(n => n.Id == id);
-        if (node == null)
-            return false;
+        await _lock.WaitAsync();
+        try
+        {
+            var node = _nodes.FirstOrDefault(n => n.Id == id);
+            if (node == null)
+                return false;
 
-        _nodes.Remove(node);
-        await SaveNodesAsync();
-
-        _logger.LogInformation("Deleted node: {NodeName} ({NodeId})", node.Name, node.Id);
-        return true;
+            _nodes.Remove(node);
+            await SaveNodesUnlockedAsync();
+            _logger.LogInformation("Deleted node: {NodeName} ({NodeId})", node.Name, node.Id);
+            return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 批量更新节点状态
-    /// </summary>
     public async Task UpdateNodesStatusAsync(List<(Guid NodeId, int Latency, NodeTestStatus Status)> updates)
     {
-        foreach (var (nodeId, latency, status) in updates)
+        await _lock.WaitAsync();
+        try
         {
-            var node = _nodes.FirstOrDefault(n => n.Id == nodeId);
-            if (node != null)
+            var changed = false;
+            foreach (var (nodeId, latency, status) in updates)
             {
+                var node = _nodes.FirstOrDefault(n => n.Id == nodeId);
+                if (node == null) continue;
                 node.LastLatency = latency;
                 node.TestStatus = status;
                 node.LastTestTime = DateTime.Now;
+                changed = true;
             }
-        }
 
-        await SaveNodesAsync();
+            if (changed)
+                await SaveNodesUnlockedAsync();
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    #endregion
-
-    #region 分组管理
-
-    /// <summary>
-    /// 获取所有分组
-    /// </summary>
     public async Task<List<ProxyNodeGroup>> GetAllGroupsAsync()
     {
-        return await Task.FromResult(_groups.OrderBy(g => g.SortOrder).ThenBy(g => g.Name).ToList());
+        await _lock.WaitAsync();
+        try
+        {
+            return _groups.OrderBy(g => g.SortOrder).ThenBy(g => g.Name).ToList();
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 根据ID获取分组
-    /// </summary>
     public async Task<ProxyNodeGroup?> GetGroupByIdAsync(Guid id)
     {
-        return await Task.FromResult(_groups.FirstOrDefault(g => g.Id == id));
+        await _lock.WaitAsync();
+        try
+        {
+            return _groups.FirstOrDefault(g => g.Id == id);
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 创建分组
-    /// </summary>
     public async Task<ProxyNodeGroup> CreateGroupAsync(ProxyNodeGroup group)
     {
-        group.Id = Guid.NewGuid();
-        group.CreatedAt = DateTime.Now;
-        group.UpdatedAt = DateTime.Now;
+        await _lock.WaitAsync();
+        try
+        {
+            if (group.Id == Guid.Empty)
+                group.Id = Guid.NewGuid();
+            group.CreatedAt = DateTime.Now;
+            group.UpdatedAt = DateTime.Now;
 
-        _groups.Add(group);
-        await SaveGroupsAsync();
-
-        _logger.LogInformation("Created group: {GroupName} ({GroupId})", group.Name, group.Id);
-        return group;
+            _groups.Add(group);
+            await SaveGroupsUnlockedAsync();
+            _logger.LogInformation("Created group: {GroupName} ({GroupId})", group.Name, group.Id);
+            return group;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 更新分组
-    /// </summary>
     public async Task<ProxyNodeGroup?> UpdateGroupAsync(Guid id, ProxyNodeGroup group)
     {
-        var existingGroup = _groups.FirstOrDefault(g => g.Id == id);
-        if (existingGroup == null)
-            return null;
+        await _lock.WaitAsync();
+        try
+        {
+            var existingGroup = _groups.FirstOrDefault(g => g.Id == id);
+            if (existingGroup == null)
+                return null;
 
-        existingGroup.Name = group.Name;
-        existingGroup.Description = group.Description;
-        existingGroup.SortOrder = group.SortOrder;
-        existingGroup.UpdatedAt = DateTime.Now;
+            existingGroup.Name = group.Name;
+            existingGroup.Description = group.Description;
+            existingGroup.SortOrder = group.SortOrder;
+            existingGroup.UpdatedAt = DateTime.Now;
 
-        await SaveGroupsAsync();
-
-        _logger.LogInformation("Updated group: {GroupName} ({GroupId})", existingGroup.Name, existingGroup.Id);
-        return existingGroup;
+            await SaveGroupsUnlockedAsync();
+            _logger.LogInformation("Updated group: {GroupName} ({GroupId})", existingGroup.Name, existingGroup.Id);
+            return existingGroup;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    /// <summary>
-    /// 删除分组
-    /// </summary>
     public async Task<bool> DeleteGroupAsync(Guid id)
     {
-        var group = _groups.FirstOrDefault(g => g.Id == id);
-        if (group == null)
-            return false;
-
-        // 将该分组的节点移到默认分组或取消分组
-        var nodesInGroup = _nodes.Where(n => n.GroupId == id).ToList();
-        foreach (var node in nodesInGroup)
+        await _lock.WaitAsync();
+        try
         {
-            node.GroupId = null;
+            var group = _groups.FirstOrDefault(g => g.Id == id);
+            if (group == null)
+                return false;
+
+            if (group.IsDefault)
+                throw new InvalidOperationException("Cannot delete the default group");
+
+            var nodesInGroup = _nodes.Where(n => n.GroupId == id).ToList();
+            var defaultGroup = _groups.FirstOrDefault(g => g.IsDefault && g.Id != id);
+            foreach (var node in nodesInGroup)
+                node.GroupId = defaultGroup?.Id;
+
+            _groups.Remove(group);
+            await SaveGroupsUnlockedAsync();
+            if (nodesInGroup.Count > 0)
+                await SaveNodesUnlockedAsync();
+
+            _logger.LogInformation("Deleted group: {GroupName} ({GroupId})", group.Name, group.Id);
+            return true;
         }
-
-        _groups.Remove(group);
-        await SaveGroupsAsync();
-
-        _logger.LogInformation("Deleted group: {GroupName} ({GroupId})", group.Name, group.Id);
-        return true;
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    #endregion
-
-    #region 配置管理
-
-    /// <summary>
-    /// 获取节点配置
-    /// </summary>
     public async Task<NodeConfigResponse> GetNodeConfigAsync(Guid? groupId = null)
     {
         var nodes = await GetNodesByGroupAsync(groupId);
@@ -309,88 +349,94 @@ public class NodeManagementService : INodeManagementService
         };
     }
 
-    /// <summary>
-    /// 应用节点配置
-    /// </summary>
     public async Task ApplyNodeConfigAsync(NodeConfigRequest request)
     {
-        if (request.GroupId.HasValue)
+        await _lock.WaitAsync();
+        try
         {
-            // 更新或创建分组
-            var group = await GetGroupByIdAsync(request.GroupId.Value);
-            if (group == null)
+            if (request.GroupId.HasValue)
             {
-                group = new ProxyNodeGroup { Name = "Default Group" };
-                await CreateGroupAsync(group);
+                var group = _groups.FirstOrDefault(g => g.Id == request.GroupId.Value);
+                if (group == null)
+                {
+                    group = new ProxyNodeGroup
+                    {
+                        Id = request.GroupId.Value,
+                        Name = "Default Group"
+                    };
+                    _groups.Add(group);
+                    await SaveGroupsUnlockedAsync();
+                }
             }
-        }
 
-        // 更新节点分组
-        foreach (var node in request.Nodes)
+            foreach (var node in request.Nodes)
+            {
+                node.GroupId = request.GroupId;
+                node.UpdatedAt = DateTime.Now;
+
+                var existingNode = node.Id != Guid.Empty
+                    ? _nodes.FirstOrDefault(n => n.Id == node.Id)
+                    : null;
+
+                if (existingNode != null)
+                {
+                    existingNode.Name = node.Name;
+                    existingNode.Type = node.Type;
+                    existingNode.Server = node.Server;
+                    existingNode.Port = node.Port;
+                    existingNode.GroupId = node.GroupId;
+                    existingNode.IsActive = node.IsActive;
+                    existingNode.UpdatedAt = DateTime.Now;
+                }
+                else
+                {
+                    if (node.Id == Guid.Empty)
+                        node.Id = Guid.NewGuid();
+                    _nodes.Add(node);
+                }
+            }
+
+            await SaveNodesUnlockedAsync();
+            _logger.LogInformation("Applied node configuration for group {GroupId}", request.GroupId);
+        }
+        finally
         {
-            node.GroupId = request.GroupId;
-            node.UpdatedAt = DateTime.Now;
-
-            var existingNode = _nodes.FirstOrDefault(n => n.Id == node.Id);
-            if (existingNode != null)
-            {
-                // 更新现有节点
-                existingNode.Name = node.Name;
-                existingNode.Type = node.Type;
-                existingNode.Server = node.Server;
-                existingNode.Port = node.Port;
-                existingNode.GroupId = node.GroupId;
-                existingNode.IsActive = node.IsActive;
-                existingNode.UpdatedAt = DateTime.Now;
-            }
-            else
-            {
-                // 添加新节点
-                _nodes.Add(node);
-            }
+            _lock.Release();
         }
-
-        await SaveNodesAsync();
-        _logger.LogInformation("Applied node configuration for group {GroupId}", request.GroupId);
     }
-
-    #endregion
-
-    #region 数据持久化
 
     private void LoadData()
     {
         try
         {
-            // 加载节点数据
-            if (File.Exists(_nodesFilePath))
+            _nodes = ReadList<ProxyNode>(_nodesFilePath);
+            _groups = ReadList<ProxyNodeGroup>(_groupsFilePath);
+
+            var dirtyGroups = _groups.RemoveAll(g => string.IsNullOrWhiteSpace(g.Name));
+            var defaultGroups = _groups.Where(g => g.IsDefault).ToList();
+            if (defaultGroups.Count > 1)
             {
-                var nodesJson = File.ReadAllText(_nodesFilePath);
-                _nodes = JsonSerializer.Deserialize<List<ProxyNode>>(nodesJson) ?? new List<ProxyNode>();
-                _logger.LogInformation("Loaded {NodeCount} nodes", _nodes.Count);
+                foreach (var extra in defaultGroups.Skip(1))
+                    extra.IsDefault = false;
             }
 
-            // 加载分组数据
-            if (File.Exists(_groupsFilePath))
-            {
-                var groupsJson = File.ReadAllText(_groupsFilePath);
-                _groups = JsonSerializer.Deserialize<List<ProxyNodeGroup>>(groupsJson) ?? new List<ProxyNodeGroup>();
-                _logger.LogInformation("Loaded {GroupCount} groups", _groups.Count);
-            }
-
-            // 确保有默认分组
+            var groupsChanged = dirtyGroups > 0 || defaultGroups.Count > 1;
             if (!_groups.Any(g => g.IsDefault))
             {
-                var defaultGroup = new ProxyNodeGroup
+                _groups.Add(new ProxyNodeGroup
                 {
                     Name = "默认分组",
                     Description = "默认节点分组",
                     IsDefault = true,
                     SortOrder = 0
-                };
-                _groups.Add(defaultGroup);
-                SaveGroupsAsync().Wait();
+                });
+                groupsChanged = true;
             }
+
+            if (groupsChanged)
+                SaveGroupsUnlockedAsync().GetAwaiter().GetResult();
+
+            _logger.LogInformation("Loaded {NodeCount} nodes and {GroupCount} groups", _nodes.Count, _groups.Count);
         }
         catch (Exception ex)
         {
@@ -398,41 +444,44 @@ public class NodeManagementService : INodeManagementService
         }
     }
 
-    private async Task SaveNodesAsync()
+    private static List<T> ReadList<T>(string path)
+    {
+        if (!File.Exists(path))
+            return new List<T>();
+
+        var json = File.ReadAllText(path);
+        if (string.IsNullOrWhiteSpace(json))
+            return new List<T>();
+
+        return JsonSerializer.Deserialize<List<T>>(json, JsonDefaults.FileOptions) ?? new List<T>();
+    }
+
+    private async Task SaveNodesUnlockedAsync()
+    {
+        await WriteAtomicAsync(_nodesFilePath, _nodes);
+    }
+
+    private async Task SaveGroupsUnlockedAsync()
+    {
+        await WriteAtomicAsync(_groupsFilePath, _groups);
+    }
+
+    private async Task WriteAtomicAsync<T>(string path, T data)
     {
         try
         {
-            var nodesJson = JsonSerializer.Serialize(_nodes, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
-
-            await File.WriteAllTextAsync(_nodesFilePath, nodesJson);
+            var json = JsonSerializer.Serialize(data, JsonDefaults.FileOptions);
+            var temp = path + ".tmp";
+            await File.WriteAllTextAsync(temp, json);
+            File.Copy(temp, path, overwrite: true);
+            File.Delete(temp);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save nodes data");
+            _logger.LogError(ex, "Failed to save {Path}", path);
+            throw;
         }
     }
 
-    private async Task SaveGroupsAsync()
-    {
-        try
-        {
-            var groupsJson = JsonSerializer.Serialize(_groups, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
-
-            await File.WriteAllTextAsync(_groupsFilePath, groupsJson);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to save groups data");
-        }
-    }
-
-    #endregion
+    private static ProxyNode? Clone(ProxyNode? node) => node;
 }

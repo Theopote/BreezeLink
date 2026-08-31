@@ -26,6 +26,13 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="data\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <Compile Remove="**\*.backup" />
+    <Compile Remove="**\*.old" />
+    <None Include="**\*.backup" />
+    <None Include="**\*.old" />
   </ItemGroup>
 
 </Project>

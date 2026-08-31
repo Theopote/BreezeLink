@@ -1,22 +1,27 @@
 using System.Diagnostics;
-using System.Text;
+using System.Collections.Generic;
 using BreezeLink.CoreController.Models;
 using Microsoft.Extensions.Logging;
 
 namespace BreezeLink.CoreController.Services;
 
 /// <summary>
-/// sing-box 进程管理器
-/// 负责启动、停止、重载 sing-box 子进程，并捕获其输出
+/// sing-box 进程管理器。保证同一时刻只有一个内核进程，日志有上限。
 /// </summary>
-public class SingBoxProcessManager : IProxyProcessManager
+public class SingBoxProcessManager : IProxyProcessManager, IDisposable
 {
+    private const int MaxLogLines = 2000;
+
     private readonly ILogger<SingBoxProcessManager> _logger;
-    private Process? _singBoxProcess;
-    private readonly StringBuilder _logBuffer = new();
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Queue<string> _logLines = new();
     private readonly object _logLock = new();
     private readonly string _singBoxPath;
     private readonly string _configPath;
+
+    private Process? _singBoxProcess;
+    private DateTime? _startTime;
+    private bool _disposed;
 
     public event EventHandler<string>? OnLogReceived;
 
@@ -25,14 +30,41 @@ public class SingBoxProcessManager : IProxyProcessManager
         _logger = logger;
         _singBoxPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sing-box", "sing-box.exe");
         _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configs", "config.json");
-
-        // 确保目录存在
         Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
     }
 
-    /// <summary>
-    /// 启动代理进程
-    /// </summary>
+    public bool IsRunning
+    {
+        get
+        {
+            try
+            {
+                return _singBoxProcess is { HasExited: false };
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+    }
+
+    public int? ProcessId
+    {
+        get
+        {
+            try
+            {
+                return IsRunning ? _singBoxProcess?.Id : null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+    }
+
+    public DateTime? StartTime => IsRunning ? _startTime : null;
+
     public async Task<bool> StartProxyAsync()
     {
         try
@@ -47,9 +79,6 @@ public class SingBoxProcessManager : IProxyProcessManager
         }
     }
 
-    /// <summary>
-    /// 停止代理进程
-    /// </summary>
     public async Task<bool> StopProxyAsync()
     {
         try
@@ -64,19 +93,11 @@ public class SingBoxProcessManager : IProxyProcessManager
         }
     }
 
-    /// <summary>
-    /// 重启代理进程
-    /// </summary>
     public async Task<bool> RestartProxyAsync()
     {
         try
         {
-            var wasRunning = IsRunning;
-            if (wasRunning)
-            {
-                await StopAsync();
-                await Task.Delay(1000);
-            }
+            await StopAsync();
             await StartAsync();
             return IsRunning;
         }
@@ -87,37 +108,36 @@ public class SingBoxProcessManager : IProxyProcessManager
         }
     }
 
-    /// <summary>
-    /// 检查代理进程是否运行
-    /// </summary>
-    public bool IsProxyRunning()
-    {
-        return IsRunning;
-    }
+    public bool IsProxyRunning() => IsRunning;
 
-    public bool IsRunning => _singBoxProcess != null && !_singBoxProcess.HasExited;
-
-    /// <summary>
-    /// 启动 sing-box 进程
-    /// </summary>
     public async Task StartAsync(string? configContent = null)
     {
+        await _gate.WaitAsync();
         try
         {
-            // 如果提供了配置内容，写入配置文件
-            if (!string.IsNullOrEmpty(configContent))
+            if (!string.IsNullOrWhiteSpace(configContent))
             {
                 await File.WriteAllTextAsync(_configPath, configContent);
-                _logger.LogInformation("Configuration updated: {ConfigPath}", _configPath);
+                _logger.LogInformation("Configuration written to {ConfigPath}", _configPath);
             }
 
-            // 检查 sing-box 是否存在
-            if (!File.Exists(_singBoxPath))
+            if (IsRunning)
             {
-                throw new FileNotFoundException($"sing-box executable not found at {_singBoxPath}");
+                if (string.IsNullOrWhiteSpace(configContent))
+                {
+                    _logger.LogInformation("sing-box is already running (PID {Pid})", ProcessId);
+                    return;
+                }
+
+                await StopCoreAsync();
             }
 
-            // 启动进程
+            if (!File.Exists(_singBoxPath))
+                throw new FileNotFoundException($"sing-box executable not found at {_singBoxPath}");
+
+            if (!File.Exists(_configPath))
+                throw new FileNotFoundException($"Configuration file not found at {_configPath}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = _singBoxPath,
@@ -125,62 +145,65 @@ public class SingBoxProcessManager : IProxyProcessManager
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = true,
                 CreateNoWindow = true,
                 WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory
             };
 
-            _singBoxProcess = Process.Start(startInfo);
-            if (_singBoxProcess == null)
+            var process = new Process
             {
-                throw new Exception("Failed to start sing-box process");
-            }
+                StartInfo = startInfo,
+                EnableRaisingEvents = true
+            };
 
-            // 设置输出处理
-            _singBoxProcess.OutputDataReceived += (sender, e) =>
+            process.OutputDataReceived += (_, e) =>
             {
-                if (!string.IsNullOrEmpty(e.Data))
+                if (string.IsNullOrEmpty(e.Data)) return;
+                AppendToLog($"[STDOUT] {e.Data}");
+                _logger.LogInformation("{Message}", e.Data);
+            };
+
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (string.IsNullOrEmpty(e.Data)) return;
+                AppendToLog($"[STDERR] {e.Data}");
+                _logger.LogWarning("{Message}", e.Data);
+            };
+
+            process.Exited += (_, _) =>
+            {
+                int? exitCode = null;
+                try { exitCode = process.ExitCode; } catch { /* ignored */ }
+                AppendToLog($"sing-box process exited with code {exitCode}");
+                _logger.LogWarning("sing-box process exited with code {ExitCode}", exitCode);
+                if (ReferenceEquals(_singBoxProcess, process))
                 {
-                    var logMessage = $"[STDOUT] {e.Data}";
-                    AppendToLog(logMessage);
-                    _logger.LogInformation(logMessage);
+                    _singBoxProcess = null;
+                    _startTime = null;
                 }
             };
 
-            _singBoxProcess.ErrorDataReceived += (sender, e) =>
+            if (!process.Start())
+                throw new InvalidOperationException("Failed to start sing-box process");
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            _singBoxProcess = process;
+            _startTime = DateTime.Now;
+
+            await Task.Delay(800);
+
+            if (!IsRunning)
             {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    var logMessage = $"[STDERR] {e.Data}";
-                    AppendToLog(logMessage);
-                    _logger.LogError(logMessage);
-                }
-            };
-
-            _singBoxProcess.BeginOutputReadLine();
-            _singBoxProcess.BeginErrorReadLine();
-
-            // 处理进程退出
-            _singBoxProcess.Exited += (sender, e) =>
-            {
-                var exitCode = _singBoxProcess.ExitCode;
-                var logMessage = $"sing-box process exited with code {exitCode}";
-                AppendToLog(logMessage);
-                _logger.LogWarning(logMessage);
-                _singBoxProcess = null;
-            };
-
-            // 等待进程启动
-            await Task.Delay(2000);
-
-            if (IsRunning)
-            {
-                AppendToLog("sing-box started successfully");
-                _logger.LogInformation("sing-box started successfully");
+                var logs = GetLogs(30);
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(logs)
+                        ? "sing-box failed to start"
+                        : $"sing-box failed to start:\n{logs}");
             }
-            else
-            {
-                throw new Exception("sing-box failed to start");
-            }
+
+            AppendToLog($"sing-box started successfully (PID {process.Id})");
+            _logger.LogInformation("sing-box started successfully (PID {Pid})", process.Id);
         }
         catch (Exception ex)
         {
@@ -188,138 +211,77 @@ public class SingBoxProcessManager : IProxyProcessManager
             AppendToLog($"Error starting sing-box: {ex.Message}");
             throw;
         }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
-    /// <summary>
-    /// 停止 sing-box 进程
-    /// </summary>
     public async Task StopAsync()
     {
-        if (_singBoxProcess != null && !_singBoxProcess.HasExited)
+        await _gate.WaitAsync();
+        try
         {
-            try
-            {
-                // 优雅地停止进程
-                if (!_singBoxProcess.CloseMainWindow())
-                {
-                    // 如果无法优雅关闭，强制终止
-                    _singBoxProcess.Kill();
-                }
-
-                // 等待进程退出
-                var timeout = TimeSpan.FromSeconds(10);
-                var startTime = DateTime.Now;
-
-                while (!_singBoxProcess.HasExited && DateTime.Now - startTime < timeout)
-                {
-                    await Task.Delay(100);
-                }
-
-                if (!_singBoxProcess.HasExited)
-                {
-                    _singBoxProcess.Kill(true);
-                }
-
-                AppendToLog("sing-box stopped");
-                _logger.LogInformation("sing-box stopped");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error stopping sing-box");
-                AppendToLog($"Error stopping sing-box: {ex.Message}");
-            }
-            finally
-            {
-                _singBoxProcess = null;
-            }
+            await StopCoreAsync();
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
-    /// <summary>
-    /// 重载 sing-box 配置
-    /// </summary>
     public async Task ReloadAsync(string configContent)
     {
-        var wasRunning = IsRunning;
-        if (wasRunning)
-        {
-            await StopAsync();
-            await Task.Delay(1000); // 等待进程完全停止
-        }
-
         await StartAsync(configContent);
-
-        if (wasRunning && !IsRunning)
-        {
-            throw new Exception("Failed to reload sing-box configuration");
-        }
+        if (!IsRunning)
+            throw new InvalidOperationException("Failed to reload sing-box configuration");
     }
 
-    /// <summary>
-    /// 获取当前状态
-    /// </summary>
     public ProxyStatus GetStatus()
     {
-        if (_singBoxProcess == null)
-        {
+        var process = _singBoxProcess;
+        if (process == null)
             return ProxyStatus.Stopped;
-        }
 
-        if (_singBoxProcess.HasExited)
+        try
+        {
+            return process.HasExited ? ProxyStatus.Error : ProxyStatus.Running;
+        }
+        catch (InvalidOperationException)
         {
             return ProxyStatus.Error;
         }
-
-        return ProxyStatus.Running;
     }
 
-    /// <summary>
-    /// 获取日志内容
-    /// </summary>
     public string GetLogs(int lastLines = 100)
     {
         lock (_logLock)
         {
-            var logs = _logBuffer.ToString();
-            var lines = logs.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (lastLines <= 0 || lastLines >= _logLines.Count)
+                return string.Join(Environment.NewLine, _logLines);
 
-            if (lines.Length <= lastLines)
-            {
-                return logs;
-            }
-
-            return string.Join('\n', lines.Skip(lines.Length - lastLines));
+            return string.Join(Environment.NewLine, _logLines.TakeLast(lastLines));
         }
     }
 
-    /// <summary>
-    /// 清空日志
-    /// </summary>
     public void ClearLogs()
     {
         lock (_logLock)
         {
-            _logBuffer.Clear();
+            _logLines.Clear();
         }
     }
 
-    /// <summary>
-    /// 更新代理配置
-    /// </summary>
     public async Task<bool> UpdateConfigurationAsync()
     {
         try
         {
-            if (IsRunning)
-            {
-                await ReloadAsync(File.ReadAllText(_configPath));
-                return true;
-            }
-            else
-            {
-                await StartAsync();
-                return IsRunning;
-            }
+            if (!File.Exists(_configPath))
+                return false;
+
+            var content = await File.ReadAllTextAsync(_configPath);
+            await ReloadAsync(content);
+            return IsRunning;
         }
         catch (Exception ex)
         {
@@ -328,21 +290,84 @@ public class SingBoxProcessManager : IProxyProcessManager
         }
     }
 
-    /// <summary>
-    /// 获取进程ID
-    /// </summary>
-    public int? ProcessId => _singBoxProcess?.Id;
+    private async Task StopCoreAsync()
+    {
+        var process = _singBoxProcess;
+        if (process == null)
+            return;
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Timed out waiting for sing-box to exit");
+                }
+            }
+
+            AppendToLog("sing-box stopped");
+            _logger.LogInformation("sing-box stopped");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error stopping sing-box");
+            AppendToLog($"Error stopping sing-box: {ex.Message}");
+        }
+        finally
+        {
+            try { process.Dispose(); } catch { /* ignored */ }
+            if (ReferenceEquals(_singBoxProcess, process))
+                _singBoxProcess = null;
+            _startTime = null;
+        }
+    }
 
     private void AppendToLog(string message)
     {
-        var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-        var formattedMessage = $"[{timestamp}] {message}";
-
+        var formatted = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
         lock (_logLock)
         {
-            _logBuffer.AppendLine(formattedMessage);
+            _logLines.Enqueue(formatted);
+            while (_logLines.Count > MaxLogLines)
+                _logLines.Dequeue();
         }
 
-        OnLogReceived?.Invoke(this, formattedMessage);
+        try
+        {
+            OnLogReceived?.Invoke(this, formatted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Log listener failed");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        try
+        {
+            _gate.Wait(TimeSpan.FromSeconds(3));
+            StopCoreAsync().GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // ignored
+        }
+        finally
+        {
+            _gate.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 }

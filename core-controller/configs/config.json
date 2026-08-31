@@ -6,9 +6,9 @@
   "dns": {
     "servers": [
       {
+        "type": "udp",
         "tag": "google",
-        "address": "8.8.8.8",
-        "detour": "direct"
+        "server": "8.8.8.8"
       }
     ]
   },
@@ -39,5 +39,10 @@
   ],
   "route": {
     "final": "direct"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090"
+    }
   }
 }

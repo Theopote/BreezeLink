@@ -279,6 +279,10 @@ public class NodesController : ControllerBase
 
             return Ok(ApiResponse<object>.Ok(null, "Group deleted successfully"));
         }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<object>.Error(ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to delete group {GroupId}", id);

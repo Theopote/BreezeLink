@@ -173,30 +173,6 @@ public class RuleGroup
 }
 
 /// <summary>
-/// 流量统计模型
-/// </summary>
-public class TrafficStats
-{
-    public Guid NodeId { get; set; }
-
-    public string NodeName { get; set; } = string.Empty;
-
-    public long UploadBytes { get; set; }
-
-    public long DownloadBytes { get; set; }
-
-    public long TotalBytes => UploadBytes + DownloadBytes;
-
-    public int Connections { get; set; }
-
-    public DateTime LastUpdate { get; set; } = DateTime.Now;
-
-    public double UploadSpeedBps { get; set; } // 字节/秒
-
-    public double DownloadSpeedBps { get; set; } // 字节/秒
-}
-
-/// <summary>
 /// 系统托盘状态模型
 /// </summary>
 public class SystemTrayStatus

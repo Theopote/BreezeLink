@@ -1,43 +1,61 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using BreezeLink.UI.Services;
-using BreezeLink.CoreController.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml.Controls;
 
 namespace BreezeLink.UI.ViewModels;
 
-/// <summary>
-/// 主窗口视图模型
-/// </summary>
-public partial class MainViewModel : ObservableObject
+public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly ProxyServiceClient _proxyService;
     private readonly NotificationService _notificationService;
     private readonly ILogger<MainViewModel> _logger;
-    private readonly Timer _statusTimer;
-    private readonly Timer _logsTimer;
+    private readonly DispatcherQueueTimer _statusTimer;
+    private readonly DispatcherQueueTimer _logsTimer;
+    private readonly DispatcherQueueTimer _reconnectTimer;
+    private bool _disposed;
 
     [ObservableProperty]
-    private string statusText = "未连接";
+    private string statusText = "正在连接核心服务...";
 
     [ObservableProperty]
     private string logsText = "等待日志...";
 
     [ObservableProperty]
-    private bool isProxyRunning = false;
+    private string trafficText = "↑ 0 B/s  ↓ 0 B/s";
 
     [ObservableProperty]
-    private bool isLoading = false;
+    private bool isProxyRunning;
 
-    public bool IsNotLoading => !IsLoading;
+    [ObservableProperty]
+    private bool isLoading;
 
-    partial void OnIsLoadingChanged(bool value) => OnPropertyChanged(nameof(IsNotLoading));
+    [ObservableProperty]
+    private bool isServiceConnected;
 
     [ObservableProperty]
     private string startButtonText = "启动代理";
 
     [ObservableProperty]
     private string stopButtonText = "停止代理";
+
+    [ObservableProperty]
+    private bool isNotificationOpen;
+
+    [ObservableProperty]
+    private string notificationTitle = string.Empty;
+
+    [ObservableProperty]
+    private string notificationMessage = string.Empty;
+
+    [ObservableProperty]
+    private InfoBarSeverity notificationSeverity = InfoBarSeverity.Informational;
+
+    public bool CanStart => !IsLoading && IsServiceConnected && !IsProxyRunning;
+    public bool CanStop => !IsLoading && IsServiceConnected && IsProxyRunning;
+    public bool CanReload => !IsLoading && IsServiceConnected;
 
     public MainViewModel(
         ProxyServiceClient proxyService,
@@ -48,33 +66,42 @@ public partial class MainViewModel : ObservableObject
         _notificationService = notificationService;
         _logger = logger;
 
-        // 初始化定时器
-        _statusTimer = new Timer(UpdateStatus, null, Timeout.Infinite, Timeout.Infinite);
-        _logsTimer = new Timer(UpdateLogs, null, Timeout.Infinite, Timeout.Infinite);
+        var dispatcher = DispatcherQueue.GetForCurrentThread();
+        _statusTimer = dispatcher.CreateTimer();
+        _statusTimer.Interval = TimeSpan.FromSeconds(5);
+        _statusTimer.Tick += async (_, _) =>
+        {
+            await UpdateStatusAsync();
+            await UpdateTrafficAsync();
+        };
 
-        // 启动时检查连接
+        _logsTimer = dispatcher.CreateTimer();
+        _logsTimer.Interval = TimeSpan.FromSeconds(3);
+        _logsTimer.Tick += async (_, _) => await UpdateLogsAsync();
+
+        _reconnectTimer = dispatcher.CreateTimer();
+        _reconnectTimer.Interval = TimeSpan.FromSeconds(3);
+        _reconnectTimer.Tick += async (_, _) => await CheckConnectionAsync();
+
+        _notificationService.NotificationRaised += OnNotificationRaised;
         _ = CheckConnectionAsync();
     }
 
-    /// <summary>
-    /// 启动代理命令
-    /// </summary>
     [RelayCommand]
     private async Task StartProxyAsync()
     {
         if (IsLoading) return;
-
         IsLoading = true;
         StartButtonText = "启动中...";
 
         try
         {
             var response = await _proxyService.StartProxyAsync();
-
             if (response?.Success == true)
             {
                 _notificationService.ShowSuccess("代理服务", "代理启动成功");
                 await UpdateStatusAsync();
+                await UpdateLogsAsync();
             }
             else
             {
@@ -96,25 +123,21 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 停止代理命令
-    /// </summary>
     [RelayCommand]
     private async Task StopProxyAsync()
     {
         if (IsLoading) return;
-
         IsLoading = true;
         StopButtonText = "停止中...";
 
         try
         {
             var response = await _proxyService.StopProxyAsync();
-
             if (response?.Success == true)
             {
-                _notificationService.ShowSuccess("代理服务", "代理停止成功");
+                _notificationService.ShowSuccess("代理服务", "代理已停止");
                 await UpdateStatusAsync();
+                await UpdateTrafficAsync();
             }
             else
             {
@@ -136,27 +159,20 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 重载代理命令
-    /// </summary>
     [RelayCommand]
     private async Task ReloadProxyAsync()
     {
         if (IsLoading) return;
-
         IsLoading = true;
 
         try
         {
-            // 这里应该从配置文件读取配置内容
-            var configContent = await File.ReadAllTextAsync("config.json");
-
-            var response = await _proxyService.ReloadProxyAsync(configContent);
-
+            var response = await _proxyService.ReloadProxyAsync();
             if (response?.Success == true)
             {
-                _notificationService.ShowSuccess("代理服务", "配置重载成功");
+                _notificationService.ShowSuccess("代理服务", "已按当前节点重新生成并重载配置");
                 await UpdateStatusAsync();
+                await UpdateLogsAsync();
             }
             else
             {
@@ -177,157 +193,157 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 刷新状态命令
-    /// </summary>
     [RelayCommand]
     private async Task RefreshStatusAsync()
     {
+        await CheckConnectionAsync();
         await UpdateStatusAsync();
+        await UpdateLogsAsync();
+        await UpdateTrafficAsync();
     }
 
-    /// <summary>
-    /// 清空日志命令
-    /// </summary>
     [RelayCommand]
     private async Task ClearLogsAsync()
     {
-        LogsText = "日志已清空";
-        _notificationService.ShowSuccess("日志", "日志已清空");
+        var response = await _proxyService.ClearLogsAsync();
+        LogsText = response?.Success == true ? "日志已清空" : (response?.Message ?? "清空失败");
+        if (response?.Success == true)
+            _notificationService.ShowSuccess("日志", "日志已清空");
+        else
+            _notificationService.ShowError("日志", LogsText);
     }
 
-    /// <summary>
-    /// 检查连接状态
-    /// </summary>
     private async Task CheckConnectionAsync()
     {
         try
         {
             var isConnected = await _proxyService.HealthCheckAsync();
+            IsServiceConnected = isConnected;
 
             if (isConnected)
             {
-                StatusText = "已连接到代理服务";
-                StartStatusTimer();
-                StartLogsTimer();
+                _reconnectTimer.Stop();
+                if (!_statusTimer.IsRunning) _statusTimer.Start();
+                if (!_logsTimer.IsRunning) _logsTimer.Start();
+                await UpdateStatusAsync();
+                await UpdateLogsAsync();
+                await UpdateTrafficAsync();
             }
             else
             {
-                StatusText = "无法连接到代理服务";
-                _notificationService.ShowWarning("连接状态", "代理服务未运行，请先启动代理服务");
+                _statusTimer.Stop();
+                _logsTimer.Stop();
+                IsProxyRunning = false;
+                StatusText = "无法连接到核心服务，正在重试...";
+                if (!_reconnectTimer.IsRunning)
+                    _reconnectTimer.Start();
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to check connection");
+            IsServiceConnected = false;
             StatusText = "连接检查失败";
         }
     }
 
-    /// <summary>
-    /// 更新状态
-    /// </summary>
-    private async void UpdateStatus(object? state)
-    {
-        await UpdateStatusAsync();
-    }
-
-    /// <summary>
-    /// 更新状态（异步）
-    /// </summary>
     private async Task UpdateStatusAsync()
     {
         try
         {
             var response = await _proxyService.GetProxyStatusAsync();
-
             if (response?.Success == true)
             {
+                IsServiceConnected = true;
                 var data = response.Data;
                 IsProxyRunning = data?.Status == "Running";
                 StatusText = IsProxyRunning ? "代理运行中" : "代理已停止";
 
                 if (data?.ProcessId.HasValue == true)
-                {
-                    StatusText += $" (PID: {data.ProcessId})";
-                }
+                    StatusText += $"  (PID: {data.ProcessId})";
+            }
+            else if (response != null && !response.Success)
+            {
+                StatusText = response.Message ?? "状态获取失败";
+                IsProxyRunning = false;
             }
             else
             {
-                StatusText = "状态获取失败";
-                IsProxyRunning = false;
+                IsServiceConnected = false;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update status");
+            IsServiceConnected = false;
             StatusText = "状态更新失败";
             IsProxyRunning = false;
         }
     }
 
-    /// <summary>
-    /// 更新日志
-    /// </summary>
-    private async void UpdateLogs(object? state)
-    {
-        await UpdateLogsAsync();
-    }
-
-    /// <summary>
-    /// 更新日志（异步）
-    /// </summary>
     private async Task UpdateLogsAsync()
     {
         try
         {
-            var response = await _proxyService.GetProxyLogsAsync(50);
-
+            var response = await _proxyService.GetProxyLogsAsync(80);
             if (response?.Success == true)
-            {
-                var logs = response.Data?.Logs ?? "无日志";
-                LogsText = logs;
-            }
+                LogsText = string.IsNullOrWhiteSpace(response.Data?.Logs) ? "暂无日志" : response.Data.Logs;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update logs");
-            LogsText = $"日志更新失败: {ex.Message}";
         }
     }
 
-    /// <summary>
-    /// 启动状态定时器
-    /// </summary>
-    private void StartStatusTimer()
+    private async Task UpdateTrafficAsync()
     {
-        _statusTimer.Change(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
+        try
+        {
+            if (!IsProxyRunning)
+            {
+                TrafficText = "↑ 0 B/s  ↓ 0 B/s";
+                return;
+            }
+
+            var response = await _proxyService.GetTrafficAsync();
+            if (response?.Success == true && response.Data != null)
+            {
+                var stats = response.Data;
+                TrafficText = $"↑ {stats.UploadSpeedText}  ↓ {stats.DownloadSpeedText}    累计 {stats.UploadText} / {stats.DownloadText}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to update traffic");
+        }
     }
 
-    /// <summary>
-    /// 启动日志定时器
-    /// </summary>
-    private void StartLogsTimer()
+    private void OnNotificationRaised(object? sender, AppNotificationEventArgs e)
     {
-        _logsTimer.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
+        NotificationTitle = e.Title;
+        NotificationMessage = e.Message;
+        NotificationSeverity = e.Severity;
+        IsNotificationOpen = true;
     }
 
-    /// <summary>
-    /// 停止定时器
-    /// </summary>
-    private void StopTimers()
+    partial void OnIsLoadingChanged(bool value) => NotifyCommandStates();
+    partial void OnIsProxyRunningChanged(bool value) => NotifyCommandStates();
+    partial void OnIsServiceConnectedChanged(bool value) => NotifyCommandStates();
+
+    private void NotifyCommandStates()
     {
-        _statusTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        _logsTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        OnPropertyChanged(nameof(CanStart));
+        OnPropertyChanged(nameof(CanStop));
+        OnPropertyChanged(nameof(CanReload));
     }
 
-    /// <summary>
-    /// 清理资源
-    /// </summary>
     public void Dispose()
     {
-        StopTimers();
-        _statusTimer.Dispose();
-        _logsTimer.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+        _notificationService.NotificationRaised -= OnNotificationRaised;
+        _statusTimer.Stop();
+        _logsTimer.Stop();
+        _reconnectTimer.Stop();
     }
 }

@@ -7,14 +7,12 @@ using System.Collections.ObjectModel;
 
 namespace BreezeLink.UI.ViewModels;
 
-/// <summary>
-/// 节点管理视图模型
-/// </summary>
 public partial class NodeManagementViewModel : ObservableObject
 {
     private readonly NodeManagementClient _nodeClient;
     private readonly NotificationService _notificationService;
     private readonly ILogger<NodeManagementViewModel> _logger;
+    private List<ProxyNode> _allNodes = new();
 
     [ObservableProperty]
     private ObservableCollection<ProxyNode> nodes = new();
@@ -29,7 +27,7 @@ public partial class NodeManagementViewModel : ObservableObject
     private ProxyNodeGroup? selectedGroup;
 
     [ObservableProperty]
-    private bool isLoading = false;
+    private bool isLoading;
 
     [ObservableProperty]
     private string searchText = string.Empty;
@@ -40,7 +38,6 @@ public partial class NodeManagementViewModel : ObservableObject
     [ObservableProperty]
     private Dictionary<string, int> statistics = new();
 
-    // 新节点表单
     [ObservableProperty]
     private string newNodeName = string.Empty;
 
@@ -48,7 +45,7 @@ public partial class NodeManagementViewModel : ObservableObject
     private string newNodeServer = string.Empty;
 
     [ObservableProperty]
-    private int newNodePort = 1080;
+    private double newNodePort = 443;
 
     [ObservableProperty]
     private string newNodePassword = string.Empty;
@@ -58,6 +55,13 @@ public partial class NodeManagementViewModel : ObservableObject
 
     [ObservableProperty]
     private string newNodeUUID = string.Empty;
+
+    public IReadOnlyList<ProxyNodeType> NodeTypes { get; } = Enum.GetValues<ProxyNodeType>();
+
+    public string StatisticsText =>
+        Statistics.Count == 0
+            ? "暂无统计"
+            : $"共 {GetStat("total")} 个节点，可用 {GetStat("success")}，失败 {GetStat("failed")}，未测 {GetStat("untested")}";
 
     public NodeManagementViewModel(
         NodeManagementClient nodeClient,
@@ -69,33 +73,23 @@ public partial class NodeManagementViewModel : ObservableObject
         _logger = logger;
     }
 
-    /// <summary>
-    /// 加载所有数据
-    /// </summary>
     [RelayCommand]
     public async Task LoadDataAsync()
     {
         if (IsLoading) return;
-
         IsLoading = true;
 
         try
         {
-            // 加载分组
             var groupsResponse = await _nodeClient.GetAllGroupsAsync();
-            if (groupsResponse?.Success == true)
+            if (groupsResponse?.Success == true && groupsResponse.Data != null)
             {
                 Groups.Clear();
-                foreach (var group in groupsResponse.Data!)
-                {
+                foreach (var group in groupsResponse.Data)
                     Groups.Add(group);
-                }
             }
 
-            // 加载节点
             await LoadNodesAsync();
-
-            // 加载统计信息
             await LoadStatisticsAsync();
         }
         catch (Exception ex)
@@ -109,52 +103,41 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 加载节点
-    /// </summary>
     private async Task LoadNodesAsync()
     {
         var response = await _nodeClient.GetAllNodesAsync(SelectedGroup?.Id);
-        if (response?.Success == true)
-        {
-            Nodes.Clear();
-            foreach (var node in response.Data!)
-            {
-                Nodes.Add(node);
-            }
-        }
+        if (response?.Success != true || response.Data == null)
+            return;
+
+        _allNodes = response.Data;
+        ApplyFilter();
     }
 
-    /// <summary>
-    /// 加载统计信息
-    /// </summary>
     private async Task LoadStatisticsAsync()
     {
         var response = await _nodeClient.GetStatisticsAsync();
-        if (response?.Success == true)
+        if (response?.Success == true && response.Data != null)
         {
-            Statistics = response.Data!;
+            Statistics = response.Data;
+            OnPropertyChanged(nameof(StatisticsText));
         }
     }
 
-    /// <summary>
-    /// 创建节点
-    /// </summary>
     [RelayCommand]
     private async Task CreateNodeAsync()
     {
         if (string.IsNullOrWhiteSpace(NewNodeName) || string.IsNullOrWhiteSpace(NewNodeServer))
         {
-            _notificationService.ShowError("创建节点", "请填写必要的字段");
+            _notificationService.ShowError("创建节点", "请填写名称和服务器");
             return;
         }
 
         var node = new ProxyNode
         {
-            Name = NewNodeName,
+            Name = NewNodeName.Trim(),
             Type = SelectedNodeType,
-            Server = NewNodeServer,
-            Port = NewNodePort,
+            Server = NewNodeServer.Trim(),
+            Port = (int)NewNodePort,
             Password = NewNodePassword,
             Method = NewNodeMethod,
             UUID = NewNodeUUID,
@@ -168,16 +151,13 @@ public partial class NodeManagementViewModel : ObservableObject
             if (response?.Success == true)
             {
                 _notificationService.ShowSuccess("创建节点", "节点创建成功");
-                await LoadNodesAsync();
-                await LoadStatisticsAsync();
-
-                // 清空表单
                 NewNodeName = string.Empty;
                 NewNodeServer = string.Empty;
-                NewNodePort = 1080;
+                NewNodePort = 443;
                 NewNodePassword = string.Empty;
-                NewNodeMethod = "aes-256-gcm";
                 NewNodeUUID = string.Empty;
+                await LoadNodesAsync();
+                await LoadStatisticsAsync();
             }
             else
             {
@@ -191,12 +171,10 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 删除节点
-    /// </summary>
     [RelayCommand]
-    private async Task DeleteNodeAsync(ProxyNode? node)
+    private async Task DeleteNodeAsync()
     {
+        var node = SelectedNode;
         if (node == null)
         {
             _notificationService.ShowWarning("删除节点", "请选择要删除的节点");
@@ -208,7 +186,7 @@ public partial class NodeManagementViewModel : ObservableObject
             var response = await _nodeClient.DeleteNodeAsync(node.Id);
             if (response?.Success == true)
             {
-                _notificationService.ShowSuccess("删除节点", "节点删除成功");
+                _notificationService.ShowSuccess("删除节点", $"已删除 {node.Name}");
                 await LoadNodesAsync();
                 await LoadStatisticsAsync();
             }
@@ -224,12 +202,10 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 测试节点
-    /// </summary>
     [RelayCommand]
-    private async Task TestNodeAsync(ProxyNode? node)
+    private async Task TestNodeAsync()
     {
+        var node = SelectedNode;
         if (node == null)
         {
             _notificationService.ShowWarning("测试节点", "请选择要测试的节点");
@@ -239,17 +215,16 @@ public partial class NodeManagementViewModel : ObservableObject
         try
         {
             var response = await _nodeClient.TestNodeAsync(node.Id);
-            if (response?.Success == true)
+            if (response?.Success == true && response.Data != null)
             {
-                var result = response.Data!;
-                var message = result.Status == NodeTestStatus.Success
-                    ? $"测试成功，延迟: {result.Latency}ms"
-                    : $"测试失败: {result.ErrorMessage}";
+                var result = response.Data;
+                if (result.Status == NodeTestStatus.Success)
+                    _notificationService.ShowSuccess("节点测试", $"{node.Name} 延迟 {result.Latency} ms");
+                else
+                    _notificationService.ShowError("节点测试", $"{node.Name} 失败: {result.ErrorMessage}");
 
-                _notificationService.ShowSuccess("节点测试", message);
-
-                // 更新节点状态
                 await LoadNodesAsync();
+                await LoadStatisticsAsync();
             }
             else
             {
@@ -263,23 +238,18 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 批量测试节点
-    /// </summary>
     [RelayCommand]
     private async Task TestAllNodesAsync()
     {
         try
         {
             var response = await _nodeClient.TestAllNodesAsync();
-            if (response?.Success == true)
+            if (response?.Success == true && response.Data != null)
             {
-                var result = response.Data!;
-                var message = $"批量测试完成: {result.SuccessCount} 成功, {result.FailedCount} 失败";
-                _notificationService.ShowSuccess("批量测试", message);
-
-                // 更新节点状态
+                var result = response.Data;
+                _notificationService.ShowSuccess("批量测试", $"完成: {result.SuccessCount} 成功, {result.FailedCount} 失败");
                 await LoadNodesAsync();
+                await LoadStatisticsAsync();
             }
             else
             {
@@ -293,19 +263,13 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 创建分组
-    /// </summary>
     [RelayCommand]
     private async Task CreateGroupAsync()
     {
-        const string groupName = "新分组";
-
         try
         {
-            var group = new ProxyNodeGroup { Name = groupName };
+            var group = new ProxyNodeGroup { Name = $"分组 {Groups.Count + 1}" };
             var response = await _nodeClient.CreateGroupAsync(group);
-
             if (response?.Success == true)
             {
                 _notificationService.ShowSuccess("创建分组", "分组创建成功");
@@ -323,12 +287,10 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 删除分组
-    /// </summary>
     [RelayCommand]
-    private async Task DeleteGroupAsync(ProxyNodeGroup? group)
+    private async Task DeleteGroupAsync()
     {
+        var group = SelectedGroup;
         if (group == null)
         {
             _notificationService.ShowWarning("删除分组", "请选择要删除的分组");
@@ -346,6 +308,7 @@ public partial class NodeManagementViewModel : ObservableObject
             var response = await _nodeClient.DeleteGroupAsync(group.Id);
             if (response?.Success == true)
             {
+                SelectedGroup = null;
                 _notificationService.ShowSuccess("删除分组", "分组删除成功");
                 await LoadDataAsync();
             }
@@ -361,59 +324,28 @@ public partial class NodeManagementViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 当分组选择改变时
-    /// </summary>
     partial void OnSelectedGroupChanged(ProxyNodeGroup? value)
     {
-        if (value != null)
-        {
-            _ = LoadNodesAsync();
-        }
+        _ = LoadNodesAsync();
     }
 
-    /// <summary>
-    /// 搜索节点
-    /// </summary>
-    partial void OnSearchTextChanged(string value)
+    partial void OnSearchTextChanged(string value) => ApplyFilter();
+
+    private void ApplyFilter()
     {
-        if (string.IsNullOrWhiteSpace(value))
+        IEnumerable<ProxyNode> query = _allNodes;
+        if (!string.IsNullOrWhiteSpace(SearchText))
         {
-            _ = LoadNodesAsync();
+            query = query.Where(n =>
+                n.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ||
+                n.Server.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ||
+                (n.Tag?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false));
         }
-        else
-        {
-            var filteredNodes = Nodes.Where(n =>
-                n.Name.Contains(value, StringComparison.OrdinalIgnoreCase) ||
-                n.Server.Contains(value, StringComparison.OrdinalIgnoreCase) ||
-                n.Tag?.Contains(value, StringComparison.OrdinalIgnoreCase) == true
-            ).ToList();
 
-            Nodes.Clear();
-            foreach (var node in filteredNodes)
-            {
-                Nodes.Add(node);
-            }
-        }
+        Nodes.Clear();
+        foreach (var node in query)
+            Nodes.Add(node);
     }
 
-    /// <summary>
-    /// 导入节点配置
-    /// </summary>
-    [RelayCommand]
-    private async Task ImportNodesAsync()
-    {
-        // TODO: 实现节点配置导入功能
-        _notificationService.ShowWarning("导入节点", "功能开发中...");
-    }
-
-    /// <summary>
-    /// 导出节点配置
-    /// </summary>
-    [RelayCommand]
-    private async Task ExportNodesAsync()
-    {
-        // TODO: 实现节点配置导出功能
-        _notificationService.ShowWarning("导出节点", "功能开发中...");
-    }
+    private int GetStat(string key) => Statistics.TryGetValue(key, out var value) ? value : 0;
 }

@@ -20,9 +20,4 @@ public sealed partial class NodeManagementDialog : ContentDialog
         _ = ViewModel.LoadDataAsync();
     }
 
-    private void ContentDialog_PrimaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
-    {
-        // 关闭对话框
-        this.Hide();
-    }
 }

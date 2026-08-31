@@ -1,27 +1,20 @@
-using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using BreezeLink.CoreController.Models;
 
 namespace BreezeLink.CoreController.Services;
 
-/// <summary>
-/// 节点测试服务实现
-/// </summary>
 public class NodeTestingService : INodeTestingService
 {
+    private const int MaxConcurrency = 8;
     private readonly ILogger<NodeTestingService> _logger;
-    private readonly HttpClient _httpClient;
     private readonly INodeManagementService _nodeManagement;
 
     public NodeTestingService(
         ILogger<NodeTestingService> logger,
-        HttpClient httpClient,
         INodeManagementService nodeManagement)
     {
         _logger = logger;
-        _httpClient = httpClient;
         _nodeManagement = nodeManagement;
     }
 
@@ -30,18 +23,30 @@ public class NodeTestingService : INodeTestingService
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(node.Name))
-        {
-            errors.Add("Node name is required");
-        }
+            errors.Add("节点名称不能为空");
 
         if (string.IsNullOrWhiteSpace(node.Server))
-        {
-            errors.Add("Server address is required");
-        }
+            errors.Add("服务器地址不能为空");
 
-        if (node.Port <= 0 || node.Port > 65535)
+        if (node.Port is <= 0 or > 65535)
+            errors.Add("端口必须在 1 到 65535 之间");
+
+        switch (node.Type)
         {
-            errors.Add("Port must be between 1 and 65535");
+            case ProxyNodeType.Shadowsocks:
+            case ProxyNodeType.ShadowsocksR:
+            case ProxyNodeType.Trojan:
+            case ProxyNodeType.Hysteria:
+            case ProxyNodeType.Hysteria2:
+                if (string.IsNullOrWhiteSpace(node.Password))
+                    errors.Add("该协议需要填写密码");
+                break;
+            case ProxyNodeType.VMess:
+            case ProxyNodeType.VLESS:
+            case ProxyNodeType.TUIC:
+                if (string.IsNullOrWhiteSpace(node.UUID))
+                    errors.Add("该协议需要填写 UUID");
+                break;
         }
 
         return Task.FromResult(errors);
@@ -56,16 +61,13 @@ public class NodeTestingService : INodeTestingService
             {
                 NodeId = nodeId,
                 Status = NodeTestStatus.Failed,
-                ErrorMessage = "Node not found"
+                ErrorMessage = "节点不存在"
             };
         }
 
         return await TestNodeAsync(node, timeout);
     }
 
-    /// <summary>
-    /// 测试单个节点的连接性
-    /// </summary>
     public async Task<NodeTestResult> TestNodeAsync(ProxyNode node, int timeout = 5000)
     {
         var result = new NodeTestResult
@@ -78,17 +80,23 @@ public class NodeTestingService : INodeTestingService
         try
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var (ok, timedOut, error) = await TestBasicConnectionAsync(node, timeout);
+            stopwatch.Stop();
 
-            // 基础连接测试
-            if (await TestBasicConnectionAsync(node, timeout))
+            if (ok)
             {
                 result.Status = NodeTestStatus.Success;
                 result.Latency = (int)stopwatch.ElapsedMilliseconds;
             }
+            else if (timedOut)
+            {
+                result.Status = NodeTestStatus.Timeout;
+                result.ErrorMessage = "连接超时";
+            }
             else
             {
                 result.Status = NodeTestStatus.Failed;
-                result.ErrorMessage = "Connection failed";
+                result.ErrorMessage = error ?? "连接失败";
             }
         }
         catch (Exception ex)
@@ -98,12 +106,21 @@ public class NodeTestingService : INodeTestingService
             result.ErrorMessage = ex.Message;
         }
 
+        try
+        {
+            await _nodeManagement.UpdateNodesStatusAsync(
+            [
+                (node.Id, result.Latency, result.Status)
+            ]);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist test result for {NodeName}", node.Name);
+        }
+
         return result;
     }
 
-    /// <summary>
-    /// 批量测试节点
-    /// </summary>
     public async Task<BatchTestResult> TestNodesAsync(List<ProxyNode> nodes, int timeout = 5000)
     {
         var batchResult = new BatchTestResult
@@ -112,13 +129,24 @@ public class NodeTestingService : INodeTestingService
             TotalCount = nodes.Count
         };
 
-        var testTasks = nodes.Select(node => TestNodeAsync(node, timeout));
-        var results = await Task.WhenAll(testTasks);
+        using var semaphore = new SemaphoreSlim(MaxConcurrency);
+        var tasks = nodes.Select(async node =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                return await TestNodeAsync(node, timeout);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
 
+        var results = await Task.WhenAll(tasks);
         batchResult.Results = results.ToList();
         batchResult.SuccessCount = results.Count(r => r.Status == NodeTestStatus.Success);
-        batchResult.FailedCount = results.Count(r => r.Status == NodeTestStatus.Failed);
-
+        batchResult.FailedCount = results.Count(r => r.Status is NodeTestStatus.Failed or NodeTestStatus.Timeout);
         return batchResult;
     }
 
@@ -129,9 +157,7 @@ public class NodeTestingService : INodeTestingService
         {
             var node = await _nodeManagement.GetNodeByIdAsync(nodeId);
             if (node != null)
-            {
                 nodes.Add(node);
-            }
         }
 
         return await TestNodesAsync(nodes, timeout);
@@ -149,7 +175,7 @@ public class NodeTestingService : INodeTestingService
         return nodes
             .Where(n => n.IsActive && n.TestStatus == NodeTestStatus.Success && n.LastLatency >= 0)
             .OrderBy(n => n.LastLatency)
-            .Take(count)
+            .Take(Math.Max(1, count))
             .ToList();
     }
 
@@ -162,41 +188,33 @@ public class NodeTestingService : INodeTestingService
             ["active"] = nodes.Count(n => n.IsActive),
             ["success"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Success),
             ["failed"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Failed),
+            ["timeout"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Timeout),
             ["untested"] = nodes.Count(n => n.TestStatus == NodeTestStatus.Pending)
         };
     }
 
-    /// <summary>
-    /// 测试节点是否可用
-    /// </summary>
     public async Task<bool> IsNodeAvailableAsync(ProxyNode node, int timeout = 5000)
     {
         var result = await TestNodeAsync(node, timeout);
         return result.Status == NodeTestStatus.Success;
     }
 
-    private async Task<bool> TestBasicConnectionAsync(ProxyNode node, int timeout)
+    private static async Task<(bool Ok, bool TimedOut, string? Error)> TestBasicConnectionAsync(ProxyNode node, int timeout)
     {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Max(500, timeout)));
         try
         {
             using var tcpClient = new TcpClient();
-            var connectTask = tcpClient.ConnectAsync(node.Server, node.Port);
-            var timeoutTask = Task.Delay(timeout);
-
-            var completedTask = await Task.WhenAny(connectTask, timeoutTask);
-
-            if (completedTask == timeoutTask)
-            {
-                return false; // 连接超时
-            }
-
-            await connectTask; // 确保连接成功
-            tcpClient.Close();
-            return true;
+            await tcpClient.ConnectAsync(node.Server, node.Port, cts.Token);
+            return (tcpClient.Connected, false, null);
         }
-        catch
+        catch (OperationCanceledException)
         {
-            return false;
+            return (false, true, "连接超时");
+        }
+        catch (Exception ex)
+        {
+            return (false, false, ex.Message);
         }
     }
 }

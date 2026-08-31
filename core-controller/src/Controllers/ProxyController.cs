@@ -1,52 +1,44 @@
+using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using BreezeLink.CoreController.Models;
 using BreezeLink.CoreController.Services;
-using System.Text.Json;
 
 namespace BreezeLink.CoreController.Controllers;
 
-/// <summary>
-/// 代理控制器
-/// 提供 REST API 接口来管理 sing-box 代理进程
-/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class ProxyController : ControllerBase
 {
     private readonly IProxyProcessManager _proxyManager;
+    private readonly ISingBoxConfigService _configService;
+    private readonly ITrafficMonitoringService _trafficMonitoring;
     private readonly ILogger<ProxyController> _logger;
 
-    public ProxyController(IProxyProcessManager proxyManager, ILogger<ProxyController> logger)
+    public ProxyController(
+        IProxyProcessManager proxyManager,
+        ISingBoxConfigService configService,
+        ITrafficMonitoringService trafficMonitoring,
+        ILogger<ProxyController> logger)
     {
         _proxyManager = proxyManager;
+        _configService = configService;
+        _trafficMonitoring = trafficMonitoring;
         _logger = logger;
     }
 
-    /// <summary>
-    /// 启动代理服务
-    /// </summary>
     [HttpPost("start")]
-    public async Task<IActionResult> Start([FromBody] StartProxyRequest request)
+    public async Task<IActionResult> Start([FromBody] StartProxyRequest? request)
     {
         try
         {
-            _logger.LogInformation("Starting proxy service");
+            var config = request?.ConfigContent;
+            if (string.IsNullOrWhiteSpace(config))
+                config = await _configService.BuildConfigAsync();
 
-            await _proxyManager.StartAsync(request.ConfigContent);
-
-            var status = _proxyManager.GetStatus();
-            var response = ApiResponse<ProxyStatusResponse>.Ok(
-                new ProxyStatusResponse
-                {
-                    Status = status.ToString(),
-                    ProcessId = _proxyManager.ProcessId,
-                    StartTime = DateTime.Now
-                },
-                "Proxy started successfully"
-            );
-
-            return Ok(response);
+            await _proxyManager.StartAsync(config);
+            return Ok(ApiResponse<ProxyStatusResponse>.Ok(BuildStatus(), "Proxy started successfully"));
         }
         catch (Exception ex)
         {
@@ -55,20 +47,13 @@ public class ProxyController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// 停止代理服务
-    /// </summary>
     [HttpPost("stop")]
-    public async Task<IActionResult> Stop([FromBody] StopProxyRequest request)
+    public async Task<IActionResult> Stop([FromBody] StopProxyRequest? request)
     {
         try
         {
-            _logger.LogInformation("Stopping proxy service");
-
             await _proxyManager.StopAsync();
-
-            var response = ApiResponse<object>.Ok(null, "Proxy stopped successfully");
-            return Ok(response);
+            return Ok(ApiResponse<object>.Ok(null, "Proxy stopped successfully"));
         }
         catch (Exception ex)
         {
@@ -77,30 +62,17 @@ public class ProxyController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// 重载代理配置
-    /// </summary>
     [HttpPost("reload")]
-    public async Task<IActionResult> Reload([FromBody] StartProxyRequest request)
+    public async Task<IActionResult> Reload([FromBody] StartProxyRequest? request)
     {
         try
         {
-            _logger.LogInformation("Reloading proxy configuration");
+            var config = request?.ConfigContent;
+            if (string.IsNullOrWhiteSpace(config))
+                config = await _configService.BuildConfigAsync();
 
-            await _proxyManager.ReloadAsync(request.ConfigContent!);
-
-            var status = _proxyManager.GetStatus();
-            var response = ApiResponse<ProxyStatusResponse>.Ok(
-                new ProxyStatusResponse
-                {
-                    Status = status.ToString(),
-                    ProcessId = _proxyManager.ProcessId,
-                    StartTime = DateTime.Now
-                },
-                "Proxy reloaded successfully"
-            );
-
-            return Ok(response);
+            await _proxyManager.ReloadAsync(config);
+            return Ok(ApiResponse<ProxyStatusResponse>.Ok(BuildStatus(), "Proxy reloaded successfully"));
         }
         catch (Exception ex)
         {
@@ -109,25 +81,12 @@ public class ProxyController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// 获取代理状态
-    /// </summary>
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
         try
         {
-            var status = _proxyManager.GetStatus();
-            var response = ApiResponse<ProxyStatusResponse>.Ok(
-                new ProxyStatusResponse
-                {
-                    Status = status.ToString(),
-                    ProcessId = _proxyManager.ProcessId,
-                    StartTime = DateTime.Now
-                }
-            );
-
-            return Ok(response);
+            return Ok(ApiResponse<ProxyStatusResponse>.Ok(BuildStatus()));
         }
         catch (Exception ex)
         {
@@ -136,30 +95,38 @@ public class ProxyController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// 获取代理日志
-    /// </summary>
-    [HttpGet("logs")]
-    public IActionResult GetLogs([FromQuery] int lastLines = 100, [FromQuery] bool clear = false)
+    [HttpGet("traffic")]
+    public async Task<IActionResult> GetTraffic()
     {
         try
         {
-            if (clear)
-            {
-                _proxyManager.ClearLogs();
-            }
+            var stats = await _trafficMonitoring.GetTrafficStatsAsync();
+            return Ok(ApiResponse<TrafficStats>.Ok(stats));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get traffic stats");
+            return StatusCode(500, ApiResponse<TrafficStats>.Error($"Failed to get traffic: {ex.Message}"));
+        }
+    }
 
+    [HttpGet("logs")]
+    public IActionResult GetLogs([FromQuery] int lastLines = 100)
+    {
+        try
+        {
+            lastLines = Math.Clamp(lastLines, 1, 2000);
             var logs = _proxyManager.GetLogs(lastLines);
-            var response = ApiResponse<LogsResponse>.Ok(
-                new LogsResponse
-                {
-                    Logs = logs,
-                    TotalLines = logs.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length,
-                    HasMore = false // 简化实现，实际可计算是否还有更多日志
-                }
-            );
+            var lineCount = string.IsNullOrEmpty(logs)
+                ? 0
+                : logs.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
-            return Ok(response);
+            return Ok(ApiResponse<LogsResponse>.Ok(new LogsResponse
+            {
+                Logs = logs,
+                TotalLines = lineCount,
+                HasMore = lineCount >= lastLines
+            }));
         }
         catch (Exception ex)
         {
@@ -168,64 +135,74 @@ public class ProxyController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// 获取代理日志流（SSE）
-    /// </summary>
-    [HttpGet("logs/stream")]
-    public async Task<IActionResult> StreamLogs()
+    [HttpDelete("logs")]
+    public IActionResult ClearLogs()
     {
-        Response.Headers.Add("Content-Type", "text/event-stream");
-        Response.Headers.Add("Cache-Control", "no-cache");
-        Response.Headers.Add("Connection", "keep-alive");
+        _proxyManager.ClearLogs();
+        return Ok(ApiResponse<object>.Ok(null, "Logs cleared"));
+    }
 
-        var cancellationToken = HttpContext.RequestAborted;
+    [HttpGet("logs/stream")]
+    public async Task StreamLogs(CancellationToken cancellationToken)
+    {
+        Response.Headers["Content-Type"] = "text/event-stream";
+        Response.Headers["Cache-Control"] = "no-cache";
+        Response.Headers["Connection"] = "keep-alive";
 
-        // 发送初始日志
-        var logs = _proxyManager.GetLogs(50);
-        if (!string.IsNullOrEmpty(logs))
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
         {
-            await Response.WriteAsync($"data: {JsonSerializer.Serialize(new { logs })}\n\n");
-            await Response.Body.FlushAsync();
-        }
+            FullMode = BoundedChannelFullMode.DropOldest
+        });
 
-        // 监听新日志
         void LogHandler(object? sender, string logMessage)
         {
-            if (!cancellationToken.IsCancellationRequested)
-            {
-                var data = JsonSerializer.Serialize(new { log = logMessage });
-                Response.WriteAsync($"data: {data}\n\n").Wait();
-            }
+            channel.Writer.TryWrite(logMessage);
         }
 
         _proxyManager.OnLogReceived += LogHandler;
-
         try
         {
-            // 保持连接直到取消
-            while (!cancellationToken.IsCancellationRequested)
+            var existing = _proxyManager.GetLogs(50);
+            if (!string.IsNullOrEmpty(existing))
             {
-                await Task.Delay(1000, cancellationToken);
+                await Response.WriteAsync($"data: {JsonSerializer.Serialize(new { logs = existing })}\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
+
+            await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                await Response.WriteAsync($"data: {JsonSerializer.Serialize(new { log = message })}\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
             }
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
-            // 正常取消
+            // client disconnected
         }
         finally
         {
             _proxyManager.OnLogReceived -= LogHandler;
+            channel.Writer.TryComplete();
         }
-
-        return new EmptyResult();
     }
 
-    /// <summary>
-    /// 健康检查端点
-    /// </summary>
     [HttpGet("health")]
     public IActionResult Health()
     {
-        return Ok(ApiResponse<object>.Ok(null, "Service is healthy"));
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            status = "ok",
+            proxy = _proxyManager.GetStatus().ToString()
+        }, "Service is healthy"));
+    }
+
+    private ProxyStatusResponse BuildStatus()
+    {
+        return new ProxyStatusResponse
+        {
+            Status = _proxyManager.GetStatus().ToString(),
+            ProcessId = _proxyManager.ProcessId,
+            StartTime = _proxyManager.StartTime
+        };
     }
 }

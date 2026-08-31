@@ -44,12 +44,11 @@ public class ProxyService : BackgroundService
             await _systemTrayService.InitializeAsync();
 
             _logger.LogInformation("ProxyService started successfully");
-
-            // 保持服务运行
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                await Task.Delay(1000, stoppingToken);
-            }
+            await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // normal shutdown
         }
         catch (Exception ex)
         {

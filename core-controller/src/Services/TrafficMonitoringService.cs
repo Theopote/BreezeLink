@@ -1,100 +1,136 @@
+using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 using System.Timers;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using BreezeLink.CoreController.Models;
 using Timer = System.Timers.Timer;
 
 namespace BreezeLink.CoreController.Services;
 
 /// <summary>
-/// 流量监控服务实现
+/// 通过 sing-box clash API 读取真实流量，内核未运行时保持为 0。
 /// </summary>
 public class TrafficMonitoringService : ITrafficMonitoringService, IDisposable
 {
     private readonly ILogger<TrafficMonitoringService> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IProxyProcessManager _proxyManager;
+    private readonly string _clashApiUrl;
+    private readonly object _statsLock = new();
+
     private Timer? _monitoringTimer;
     private long _uploadBytes;
     private long _downloadBytes;
+    private double _uploadSpeedBps;
+    private double _downloadSpeedBps;
+    private DateTime _lastSample = DateTime.MinValue;
     private bool _isMonitoring;
-    private readonly object _statsLock = new();
 
-    public TrafficMonitoringService(ILogger<TrafficMonitoringService> logger)
+    public TrafficMonitoringService(
+        ILogger<TrafficMonitoringService> logger,
+        IHttpClientFactory httpClientFactory,
+        IProxyProcessManager proxyManager,
+        IConfiguration configuration)
     {
         _logger = logger;
-        _uploadBytes = 0;
-        _downloadBytes = 0;
+        _httpClientFactory = httpClientFactory;
+        _proxyManager = proxyManager;
+        _clashApiUrl = configuration.GetValue("ProxySettings:ClashApiUrl", "http://127.0.0.1:9090")!.TrimEnd('/');
     }
 
-    /// <summary>
-    /// 开始流量监控
-    /// </summary>
     public void StartMonitoring()
     {
         if (_isMonitoring)
-        {
-            _logger.LogWarning("Traffic monitoring is already running");
             return;
-        }
 
-        _logger.LogInformation("Starting traffic monitoring");
-
-        _monitoringTimer = new Timer(1000); // 每秒更新一次
+        _monitoringTimer = new Timer(1000);
         _monitoringTimer.Elapsed += OnTimerElapsed;
+        _monitoringTimer.AutoReset = true;
         _monitoringTimer.Start();
-
         _isMonitoring = true;
-        _logger.LogInformation("Traffic monitoring started");
+        _logger.LogInformation("Traffic monitoring started ({ClashApi})", _clashApiUrl);
     }
 
-    /// <summary>
-    /// 停止流量监控
-    /// </summary>
     public void StopMonitoring()
     {
         if (!_isMonitoring)
-        {
             return;
-        }
-
-        _logger.LogInformation("Stopping traffic monitoring");
 
         _monitoringTimer?.Stop();
         _monitoringTimer?.Dispose();
         _monitoringTimer = null;
-
         _isMonitoring = false;
         _logger.LogInformation("Traffic monitoring stopped");
     }
 
-    /// <summary>
-    /// 获取当前流量统计
-    /// </summary>
-    public async Task<TrafficStats> GetTrafficStatsAsync()
+    public Task<TrafficStats> GetTrafficStatsAsync()
     {
-        return await Task.FromResult(new TrafficStats
+        lock (_statsLock)
         {
-            UploadBytes = _uploadBytes,
-            DownloadBytes = _downloadBytes,
-            LastUpdateTime = DateTime.Now
-        });
+            return Task.FromResult(new TrafficStats
+            {
+                UploadBytes = _uploadBytes,
+                DownloadBytes = _downloadBytes,
+                UploadSpeedBps = _uploadSpeedBps,
+                DownloadSpeedBps = _downloadSpeedBps,
+                LastUpdateTime = DateTime.Now
+            });
+        }
     }
 
-    private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
+    private async void OnTimerElapsed(object? sender, ElapsedEventArgs e)
     {
         try
         {
-            // 这里应该实现实际的流量监控逻辑
-            // 目前只是一个占位符实现
+            if (!_proxyManager.IsRunning)
+            {
+                ResetStats();
+                return;
+            }
 
-            // 模拟流量数据更新
+            var client = _httpClientFactory.CreateClient(nameof(TrafficMonitoringService));
+            client.Timeout = TimeSpan.FromSeconds(2);
+            var payload = await client.GetFromJsonAsync<ClashConnectionsResponse>($"{_clashApiUrl}/connections");
+            if (payload == null)
+                return;
+
+            var now = DateTime.Now;
             lock (_statsLock)
             {
-                // 在实际实现中，这里应该从网络接口获取真实的流量数据
-                _uploadBytes += Random.Shared.Next(1000, 5000);
-                _downloadBytes += Random.Shared.Next(5000, 15000);
+                if (_lastSample != DateTime.MinValue)
+                {
+                    var dt = (now - _lastSample).TotalSeconds;
+                    if (dt > 0)
+                    {
+                        _uploadSpeedBps = Math.Max(0, (payload.UploadTotal - _uploadBytes) / dt);
+                        _downloadSpeedBps = Math.Max(0, (payload.DownloadTotal - _downloadBytes) / dt);
+                    }
+                }
+
+                _uploadBytes = payload.UploadTotal;
+                _downloadBytes = payload.DownloadTotal;
+                _lastSample = now;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error updating traffic statistics");
+            _logger.LogDebug(ex, "Clash API traffic poll failed");
+        }
+    }
+
+    private void ResetStats()
+    {
+        lock (_statsLock)
+        {
+            if (_uploadBytes == 0 && _downloadBytes == 0 && _uploadSpeedBps == 0 && _downloadSpeedBps == 0)
+                return;
+
+            _uploadBytes = 0;
+            _downloadBytes = 0;
+            _uploadSpeedBps = 0;
+            _downloadSpeedBps = 0;
+            _lastSample = DateTime.MinValue;
         }
     }
 
@@ -102,5 +138,14 @@ public class TrafficMonitoringService : ITrafficMonitoringService, IDisposable
     {
         StopMonitoring();
         GC.SuppressFinalize(this);
+    }
+
+    private sealed class ClashConnectionsResponse
+    {
+        [JsonPropertyName("uploadTotal")]
+        public long UploadTotal { get; set; }
+
+        [JsonPropertyName("downloadTotal")]
+        public long DownloadTotal { get; set; }
     }
 }

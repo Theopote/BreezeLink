@@ -18,29 +18,14 @@ public class SystemTrayService : ISystemTrayService
     /// <summary>
     /// 初始化系统托盘
     /// </summary>
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
     {
         if (_isInitialized)
-        {
-            _logger.LogWarning("System tray is already initialized");
-            return;
-        }
+            return Task.CompletedTask;
 
-        try
-        {
-            _logger.LogInformation("Initializing system tray");
-
-            // 这里应该实现实际的系统托盘初始化逻辑
-            // 目前只是一个占位符实现
-
-            _isInitialized = true;
-            _logger.LogInformation("System tray initialized successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to initialize system tray");
-            throw;
-        }
+        _isInitialized = true;
+        _logger.LogInformation("System tray placeholder initialized (UI hosts the real tray)");
+        return Task.CompletedTask;
     }
 
     /// <summary>

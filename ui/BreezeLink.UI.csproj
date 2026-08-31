@@ -19,6 +19,12 @@
     <AppxPackage>false</AppxPackage>
     <GeneratePriConfigXmlFile>false</GeneratePriConfigXmlFile>
     <DisableMrtCore>true</DisableMrtCore>
+    <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
+    <EnablePriGenTooling>false</EnablePriGenTooling>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <AppxGeneratePrisForPortableLibrariesEnabled>false</AppxGeneratePrisForPortableLibrariesEnabled>
+    <EnableDefaultPriItems>false</EnableDefaultPriItems>
+    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -36,4 +42,7 @@
     <Compile Include="..\core-controller\src\Models\ApiModels.cs" Link="Models\ApiModels.cs" />
     <Compile Include="..\core-controller\src\Models\NodeModels.cs" Link="Models\NodeModels.cs" />
   </ItemGroup>
+
+  <!-- 命令行 SDK 缺少 VS Appx 任务，跳过 PRI 展开 -->
+  <Target Name="AddPriPayloadFilesToCopyToOutputDirectoryItems" />
 </Project>
